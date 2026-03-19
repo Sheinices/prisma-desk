@@ -130,7 +130,9 @@
               env: options?.env || null,
             },
           }).catch((error) => {
-            emit(`child-process-spawn-error-${id}`, String(error));
+            const message = String(error);
+            console.warn("APP child_process_spawn invoke failed", { command, args, message });
+            emit(`child-process-spawn-error-${id}`, message);
           });
 
           return {
@@ -265,12 +267,12 @@
     findPlayer: async () => {
       const result = await invoke("find_player");
       if (result?.success && result?.path) {
-        const escapedPath = String(result.path).replace(/\\/g, "\\\\");
-        localStorage.setItem("player_nw_path", escapedPath);
+        const playerPath = String(result.path);
+        localStorage.setItem("player_nw_path", playerPath);
         localStorage.setItem("player_torrent", "other");
         if (window.Prisma?.Storage) {
           try {
-            window.Prisma.Storage.set("player_nw_path", escapedPath);
+            window.Prisma.Storage.set("player_nw_path", playerPath);
             window.Prisma.Storage.set("player_torrent", "other");
           } catch {
             // noop

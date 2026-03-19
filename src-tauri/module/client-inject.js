@@ -1967,6 +1967,13 @@
   function patchPlayerExternalLaunch() {
     if (!window.desktopAPI || !window.Prisma || !Prisma.Player || Prisma.Player.__desktopPatched) return;
 
+    const isWindows = () => /windows/i.test(navigator.userAgent || "");
+
+    const shouldInterceptExternal = () => {
+      const isMac = Prisma.Platform && typeof Prisma.Platform.macOS === "function" && Prisma.Platform.macOS();
+      return isMac || isWindows();
+    };
+
     const resolvePlayerNeed = (data, mode) => {
       if (mode === "iptv") return "player_iptv";
       return data && data.torrent_hash ? "player_torrent" : "player";
@@ -1998,16 +2005,20 @@
       const safeUrl = String((data && data.url) || "").replace("&preload", "&play");
       if (!safeUrl) return false;
 
-      if (player === "other") {
-        const path = Prisma.Storage.field("player_nw_path");
-        if (!path) return false;
+      const playerPath = Prisma.Storage.field("player_nw_path");
+      const useDirectSpawn =
+        player === "other" ||
+        (isWindows() && player === "vlc" && typeof playerPath === "string" && playerPath.length > 0);
+
+      if (useDirectSpawn) {
+        if (!playerPath) return false;
 
         try {
           const spawn = window.require("child_process").spawn;
-          spawn(path, [encodeURI(safeUrl)]);
+          spawn(playerPath, [encodeURI(safeUrl)]);
           return true;
         } catch (error) {
-          console.warn("APP external other-player spawn failed", error);
+          console.warn("APP external player spawn failed", error);
           return false;
         }
       }
@@ -2026,7 +2037,7 @@
 
     const originalPlay = Prisma.Player.play.bind(Prisma.Player);
     Prisma.Player.play = function (data) {
-      if (Prisma.Platform && typeof Prisma.Platform.macOS === "function" && Prisma.Platform.macOS()) {
+      if (shouldInterceptExternal()) {
         tryLaunch(data, "play").then((opened) => {
           if (!opened) originalPlay(data);
         });
@@ -2039,7 +2050,7 @@
     const originalIptv = Prisma.Player.iptv ? Prisma.Player.iptv.bind(Prisma.Player) : null;
     if (originalIptv) {
       Prisma.Player.iptv = function (data) {
-        if (Prisma.Platform && typeof Prisma.Platform.macOS === "function" && Prisma.Platform.macOS()) {
+        if (shouldInterceptExternal()) {
           tryLaunch(data, "iptv").then((opened) => {
             if (!opened) originalIptv(data);
           });
