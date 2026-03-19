@@ -324,12 +324,24 @@ fn child_process_spawn(
     app: tauri::AppHandle,
     req: ChildProcessSpawnRequest,
 ) -> Result<bool, String> {
-    let cmd_sanitized = req
+    #[cfg_attr(not(target_os = "windows"), allow(unused_mut))]
+    let mut cmd_sanitized = req
         .cmd
         .trim()
         .trim_matches('"')
         .trim_matches('\'')
         .to_string();
+
+    #[cfg(target_os = "windows")]
+    {
+        if cmd_sanitized.len() >= 3 {
+            let bytes = cmd_sanitized.as_bytes();
+            let is_drive_path = bytes[1] == b':';
+            if is_drive_path && cmd_sanitized.contains("\\\\") {
+                cmd_sanitized = cmd_sanitized.replace("\\\\", "\\");
+            }
+        }
+    }
 
     #[cfg(target_os = "macos")]
     if let Some(app_name) = macos_player_app_name(&cmd_sanitized) {
@@ -401,7 +413,6 @@ fn child_process_spawn(
 
     Ok(true)
 }
-
 #[tauri::command]
 fn open_folder(path: String) -> CommandResult {
     match tauri_plugin_opener::open_path(path, None::<&str>) {
