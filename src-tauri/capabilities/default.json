@@ -1,0 +1,19 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capability for the main window",
+  "windows": ["main"],
+  "remote": {
+    "urls": [
+      "http://prisma.ws/*",
+      "http://prisma.kim/*",
+      "http://prisma.cam/*",
+      "http://pris.cam/*",
+      "http://localhost:*/*"
+    ]
+  },
+  "permissions": [
+    "core:default",
+    "opener:default"
+  ]
+}

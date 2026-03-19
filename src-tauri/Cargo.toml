@@ -1,0 +1,29 @@
+[package]
+name = "Prisma"
+version = "1.1.0"
+description = "Prisma Desktop"
+authors = ["you"]
+edition = "2021"
+
+[lib]
+name = "prisma_desktop_lib"
+path = "core/lib.rs"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "Prisma"
+path = "core/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+which = "8"
+reqwest = { version = "0.12", features = ["blocking", "json", "rustls-tls"] }
+rfd = "0.15"
+tiny_http = "0.12"
