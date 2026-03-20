@@ -42,7 +42,7 @@
     "updater": {
       "active": true,
       "dialog": false,
-      "pubkey": "RWS9NqYV3OIawy7vAc2GGdmRfSsfvSKX8Y6/NaevF7ZpTbVRtEVyY++1",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEMzMUFFMkRDMTVBNjM2QkQKUldTOU5xWVYzT0lhd3k3dkFjMkdHZG1SZlNzZnZTS1g4WTYvTmFldkY3WnBUYlZSdEVWeVkrKzEK",
       "endpoints": [
         "https://github.com/Sheinices/prisma-desk/releases/latest/download/latest.json"
       ]
