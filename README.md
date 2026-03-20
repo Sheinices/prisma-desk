@@ -1,35 +1,37 @@
 # Prisma Desktop
 
-Нативное десктоп-приложение Prisma на **Tauri v2 + Rust**.
+Prisma Desktop на **Tauri v2 + Rust**.
 
-Десктоп-клиент Prisma с интеграциями для внешних плееров и TorrServer. Сборка: macOS, Linux, Windows.
+Клиент Prisma с desktop-интеграциями: внешние плееры, встроенный TorrServer, нативные функции окна и автообновление релизов.
 
-## Ключевые возможности
-- Смена зеркала (`http://prisma.ws` по умолчанию)
-- Desktop bridge/inject для интеграции с клиентским кодом
-- Управление TorrServer: установка, запуск, остановка, статус, обновление, удаление
+## Возможности
+- Смена зеркала Prisma (`http://prisma.ws` по умолчанию)
+- Desktop bridge/inject для клиентского кода
+- Встроенный TorrServer: установка, запуск, остановка, статус, обновление, удаление
 - Запуск внешних плееров
-- Локальный импорт/экспорт настроек через файл
+- Локальный импорт/экспорт настроек
+- Автообновление приложения (для установленной версии)
 
-## Технологический стек
+## Стек
 - Tauri 2
 - Rust
-- JavaScript (bridge + client inject)
+- JavaScript (`bridge.js`, `client-inject.js`)
 
-## Структура репозитория
-- `web/` — frontend-ресурсы
-- `src-tauri/core/` — Rust backend и команды Tauri
-- `src-tauri/module/bridge.js` — bridge API в WebView
+## Структура
+- `web/` — frontend ресурсы
+- `src-tauri/core/` — Rust backend и Tauri команды
+- `src-tauri/module/bridge.js` — bridge API для WebView
 - `src-tauri/module/client-inject.js` — клиентский inject
-- `src-tauri/capabilities/default.json` — whitelist удаленных URL
-- `src-tauri/macos-info.plist` — macOS ATS исключения для `http://` источников
-- `.github/workflows/build-all-platforms.yml` — CI сборка под все платформы
+- `src-tauri/capabilities/default.json` — permissions и remote URLs
+- `src-tauri/macos-info.plist` — ATS настройки для macOS
+- `.github/workflows/main.yml` — сборка артефактов (all platforms)
+- `.github/workflows/updater.yml` — релиз/апдейтер артефакты
 
-## Требования к окружению
+## Требования
 - Node.js 20+
 - npm
-- Rust toolchain (рекомендуется `rustup`)
-- Системные зависимости Tauri: https://tauri.app/start/prerequisites/
+- Rust toolchain (`rustup`)
+- системные зависимости Tauri: <https://tauri.app/start/prerequisites/>
 
 ## Быстрый старт
 ```bash
@@ -37,52 +39,59 @@ npm ci
 npm run dev
 ```
 
-## Команды проекта
+## Команды
 ```bash
-npm run dev         # запуск в dev-режиме
-npm run build       # production-сборка для текущей платформы
+npm run dev         # dev запуск
+npm run build       # production сборка текущей платформы
 npm run check:rust  # cargo check
-npm run tauri       # прямой доступ к tauri CLI
+npm run tauri       # tauri CLI
 ```
 
-## Production-сборки
+## Локальные сборки
 
-### macOS Apple Silicon (ARM64)
+### macOS ARM64
 ```bash
 npm run tauri -- build --target aarch64-apple-darwin --bundles app,dmg
 ```
 
-### macOS Intel (x64)
+### macOS x64
 ```bash
 rustup target add x86_64-apple-darwin
-npm run tauri -- build --target x86_64-apple-darwin --bundles app,dmg
-```
-
-Если кросс-упаковка `dmg` на ARM-хосте нестабильна:
-```bash
 npm run tauri -- build --target x86_64-apple-darwin --bundles app
 ```
 
-### Linux / Windows
-Рекомендуется нативная сборка на соответствующей ОС или CI workflow:
-- `.github/workflows/build-all-platforms.yml`
+### Linux x64
+```bash
+npm run tauri -- build --target x86_64-unknown-linux-gnu
+```
 
-## Артефакты сборки
-- macOS ARM: `src-tauri/target/aarch64-apple-darwin/release/bundle/`
-- macOS Intel: `src-tauri/target/x86_64-apple-darwin/release/bundle/`
-- Linux: `src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/`
-- Windows: `src-tauri/target/x86_64-pc-windows-msvc/release/bundle/`
+### Windows x64
+```bash
+npm run tauri -- build --target x86_64-pc-windows-msvc
+```
+
+## CI/CD
+- Пуш тега `v*` запускает:
+  - `main.yml` — платформенные артефакты
+  - `updater.yml` — release + updater артефакты
+
+## Автообновление
+- Настраивается в `src-tauri/tauri.conf.json` (`plugins.updater`)
+- Требует signing keys (`TAURI_SIGNING_PRIVATE_KEY`)
+- Для macOS релизов требуется Apple signing/notarization secrets
+- На Windows **portable**-сборке автообновление отключено (показывается сообщение о ручном обновлении через GitHub Releases)
+
+## Артефакты
+- macOS: `.app`, `.dmg`
+- Linux: `.AppImage`, `.deb`, `.rpm`
+- Windows: `.msi`, `.exe` (NSIS), `Prisma-portable-x64.zip`
 
 ## Конфигурация
 
-### URL Prisma
-Хранится в store как `prismaUrl`.
-Путь к store на macOS:
-- `~/Library/Application Support/com.prisma.desktop/store.json`
+### Prisma URL
+- Store key: `prismaUrl`
+- Пример store на macOS: `~/Library/Application Support/com.prisma.desktop/store.json`
 
-Дефолтное значение:
-- `http://prisma.ws`
-
-### Разрешенные remote URL
-Настраиваются в:
+### Remote URLs / permissions
 - `src-tauri/capabilities/default.json`
+
