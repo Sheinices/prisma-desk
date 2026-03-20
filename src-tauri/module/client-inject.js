@@ -95,7 +95,41 @@
     }
   }
 
+  function ensureAboutModalStyles() {
+    if (document.getElementById("app-about-modal-style")) return;
+
+    const style = document.createElement("style");
+    style.id = "app-about-modal-style";
+    style.textContent = `
+      .app-modal-about {
+        text-align: center;
+      }
+
+      .app-modal-about ul {
+        list-style: none;
+        margin: 18px 0 0 0;
+        padding: 0;
+      }
+
+      .app-modal-about li {
+        margin: 10px 0;
+        line-height: 1.45;
+      }
+
+      .app-modal-about .github {
+        margin: 20px auto 0;
+        justify-content: center;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+    `;
+
+    document.head.appendChild(style);
+  }
+
   function addAppSettings() {
+    ensureAboutModalStyles();
     Prisma.Lang.add({
       // Основные настройки
       app_settings: {
@@ -446,9 +480,9 @@
         uk: "Версія Prisma: {prisma_version}",
       },
       app_about_github: {
-        ru: "GitHub",
-        en: "GitHub",
-        uk: "GitHub",
+        ru: "Github",
+        en: "Github",
+        uk: "Github",
       },
       app_about_loading: {
         ru: "Загружаю данные...",
@@ -625,10 +659,10 @@
                     Prisma.Template.add(
                       "about_modal",
                       `<div class="app-modal-about">
-                        ` +
+                        <div class="app-modal-about__title">` +
                         Prisma.Lang.translate("app_about_title") +
-                        `
-                        <ul>
+                        `</div>
+                        <ul class="app-modal-about__versions">
                             <li>` +
                         Prisma.Lang.translate("app_about_version_app").replace(
                           "{current_version}",
@@ -659,12 +693,21 @@
                     );
 
                     let about_html = Prisma.Template.get("about_modal", {});
-                    about_html.find(".github").on("hover:enter", function () {
+                    const openProjectGitHub = function () {
+                      if (window.desktopAPI && window.desktopAPI.external) {
+                        window.desktopAPI.external
+                          .open("https://github.com/Sheinices/prisma-desk")
+                          .catch(() => {});
+                        return;
+                      }
+
                       window.open(
                         "https://github.com/Sheinices/prisma-desk",
                         "_blank",
                       );
-                    });
+                    };
+
+                    about_html.find(".github").on("hover:enter click", openProjectGitHub);
 
                     Prisma.Modal.open({
                       title: Prisma.Lang.translate(
