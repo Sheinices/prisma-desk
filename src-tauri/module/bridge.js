@@ -162,6 +162,21 @@
     loadUrl: (url) => invoke("load_url", { url }),
     getAppVersion: () => invoke("get_app_version"),
 
+    appUpdater: {
+      check: () =>
+        invoke("app_check_update").catch((e) => ({
+          available: false,
+          message: String(e),
+        })),
+      install: () =>
+        invoke("app_install_update").catch((e) => ({
+          success: false,
+          updated: false,
+          message: String(e),
+        })),
+    },
+
+
     store: {
       get: (key) => invoke("store_get", { key }),
       set: (key, value) => invoke("store_set", { key, value }),

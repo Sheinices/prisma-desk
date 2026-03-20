@@ -2063,6 +2063,57 @@
 
     Prisma.Player.__desktopPatched = true;
   }
+  async function initAppAutoUpdate() {
+    if (window.__app_autoupdate_done) return;
+    window.__app_autoupdate_done = true;
+
+    if (!window.desktopAPI || !window.desktopAPI.appUpdater) return;
+
+    try {
+      let enabled = false;
+
+      try {
+        enabled = toBool(await window.desktopAPI.store.get("autoUpdate"));
+      } catch {
+        enabled = false;
+      }
+
+      if (!enabled) {
+        enabled = toBool(localStorage.getItem("autoUpdate"));
+      }
+
+      if (!enabled) {
+        window.__app_autoupdate_last = "disabled";
+        return;
+      }
+
+      const checkResult = await window.desktopAPI.appUpdater.check();
+      if (!checkResult || !checkResult.available) {
+        window.__app_autoupdate_last = "no-updates";
+        return;
+      }
+
+      window.__app_autoupdate_last = "available:" + String(checkResult.version || "unknown");
+      Prisma.Noty.show(
+        "Найдено обновление Prisma " + String(checkResult.version || "") + ". Загружаем...",
+      );
+
+      const installResult = await window.desktopAPI.appUpdater.install();
+      if (installResult && installResult.success && installResult.updated) {
+        window.__app_autoupdate_last = "installed:" + String(checkResult.version || "unknown");
+        Prisma.Noty.show("Обновление установлено. Перезапустите приложение.");
+      } else {
+        window.__app_autoupdate_last = "install-failed";
+        if (installResult && installResult.message) {
+          Prisma.Noty.show(String(installResult.message));
+        }
+      }
+    } catch (error) {
+      window.__app_autoupdate_last = "error";
+      console.warn("APP auto update failed:", error);
+    }
+  }
+
   async function initTsAutoStart() {
     if (window.__ts_autostart_done) return;
     window.__ts_autostart_done = true;
@@ -2121,6 +2172,7 @@
     enforceDesktopPlatformCompatibility(); // Совместимость веток desktop в Prisma
     patchExternalProtocolNavigation(); // Открытие iina://, infuse:// и др. через нативный opener
     patchPlayerExternalLaunch(); // Прямой запуск внешних плееров на macOS в Tauri
+    initAppAutoUpdate(); // Автообновление приложения при включенной настройке
     initTsAutoStart(); // Надежный автозапуск TorrServer на старте клиента
     overwriteToggleFullscreen(); // Переопределение функции Utils.toggleFullscreen
     bindHeadExitToDesktopClose(); // Штатная кнопка выхода в шапке

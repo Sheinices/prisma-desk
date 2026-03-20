@@ -128,6 +128,77 @@ fn get_app_version(app: tauri::AppHandle) -> String {
 }
 
 #[tauri::command]
+async fn app_check_update(app: tauri::AppHandle) -> Result<Value, String> {
+    use tauri_plugin_updater::UpdaterExt;
+
+    let updater = app
+        .updater()
+        .map_err(|e| format!("failed to create updater: {e}"))?;
+
+    let update = updater
+        .check()
+        .await
+        .map_err(|e| format!("failed to check updates: {e}"))?;
+
+    if let Some(update) = update {
+        Ok(json!({
+            "available": true,
+            "currentVersion": update.current_version,
+            "version": update.version,
+            "date": update.date.map(|d| d.to_string()),
+            "body": update.body
+        }))
+    } else {
+        Ok(json!({
+            "available": false
+        }))
+    }
+}
+
+#[tauri::command]
+async fn app_install_update(app: tauri::AppHandle) -> Result<Value, String> {
+    use tauri_plugin_updater::UpdaterExt;
+
+    let updater = app
+        .updater()
+        .map_err(|e| format!("failed to create updater: {e}"))?;
+
+    let update = updater
+        .check()
+        .await
+        .map_err(|e| format!("failed to check updates: {e}"))?;
+
+    let Some(update) = update else {
+        return Ok(json!({
+            "success": true,
+            "updated": false,
+            "message": "No updates available"
+        }));
+    };
+
+    update
+        .download_and_install(
+            |chunk_length, content_length| {
+                println!(
+                    "App update download progress: {chunk_length} / {:?}",
+                    content_length
+                );
+            },
+            || {
+                println!("App update download finished, installing...");
+            },
+        )
+        .await
+        .map_err(|e| format!("failed to install update: {e}"))?;
+
+    Ok(json!({
+        "success": true,
+        "updated": true,
+        "message": "Update installed, restarting..."
+    }))
+}
+
+#[tauri::command]
 fn store_get(key: String, state: tauri::State<'_, AppState>) -> Option<Value> {
     let store = state.store.lock().expect("store poisoned");
     store.get(&key)
@@ -837,6 +908,7 @@ fn initialize_prisma_defaults(window: &tauri::Webview, state: &tauri::State<'_, 
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.unminimize();
@@ -946,6 +1018,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_app_version,
+            app_check_update,
+            app_install_update,
             store_get,
             store_set,
             store_has,
