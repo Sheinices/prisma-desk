@@ -98,3 +98,30 @@ jobs:
           releaseDraft: false
           prerelease: false
           args: --target ${{ matrix.target }}
+
+      - name: Create Windows portable zip
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: |
+          $releaseDir = "src-tauri/target/${{ matrix.target }}/release"
+          $portableDir = "$releaseDir/portable"
+          New-Item -ItemType Directory -Force -Path $portableDir | Out-Null
+
+          Copy-Item "$releaseDir/Prisma.exe" "$portableDir/Prisma.exe" -Force
+          if (Test-Path "$releaseDir/WebView2Loader.dll") {
+            Copy-Item "$releaseDir/WebView2Loader.dll" "$portableDir/WebView2Loader.dll" -Force
+          }
+          if (Test-Path "$releaseDir/resources") {
+            Copy-Item "$releaseDir/resources" "$portableDir/resources" -Recurse -Force
+          }
+
+          Compress-Archive -Path "$portableDir/*" -DestinationPath "$releaseDir/bundle/nsis/Prisma-portable-x64.zip" -Force
+
+      - name: Upload Windows portable to release
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: src-tauri/target/${{ matrix.target }}/release/bundle/nsis/Prisma-portable-x64.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

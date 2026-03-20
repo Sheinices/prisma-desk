@@ -189,6 +189,23 @@ jobs:
       - name: Build Windows x64
         run: npm run tauri -- build --target x86_64-pc-windows-msvc
 
+      - name: Create Windows portable zip
+        shell: pwsh
+        run: |
+          $releaseDir = "src-tauri/target/x86_64-pc-windows-msvc/release"
+          $portableDir = "$releaseDir/portable"
+          New-Item -ItemType Directory -Force -Path $portableDir | Out-Null
+
+          Copy-Item "$releaseDir/Prisma.exe" "$portableDir/Prisma.exe" -Force
+          if (Test-Path "$releaseDir/WebView2Loader.dll") {
+            Copy-Item "$releaseDir/WebView2Loader.dll" "$portableDir/WebView2Loader.dll" -Force
+          }
+          if (Test-Path "$releaseDir/resources") {
+            Copy-Item "$releaseDir/resources" "$portableDir/resources" -Recurse -Force
+          }
+
+          Compress-Archive -Path "$portableDir/*" -DestinationPath "$releaseDir/bundle/nsis/Prisma-portable-x64.zip" -Force
+
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -196,3 +213,4 @@ jobs:
           path: |
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/Prisma-portable-x64.zip

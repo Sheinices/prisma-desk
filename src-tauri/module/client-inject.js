@@ -2069,6 +2069,20 @@
 
     if (!window.desktopAPI || !window.desktopAPI.appUpdater) return;
 
+    const isWindows = /windows/i.test(navigator.userAgent || "");
+    const releasesUrl = "https://github.com/Sheinices/prisma-desk/releases/latest";
+
+    const isLikelyPortableUpdateError = (message) => {
+      const text = String(message || "").toLowerCase();
+      return (
+        text.includes("read-only file system") ||
+        text.includes("os error 30") ||
+        text.includes("access is denied") ||
+        text.includes("permission denied") ||
+        text.includes("the process cannot access the file")
+      );
+    };
+
     try {
       let enabled = false;
 
@@ -2103,17 +2117,25 @@
         window.__app_autoupdate_last = "installed:" + String(checkResult.version || "unknown");
         Prisma.Noty.show("Обновление установлено. Перезапустите приложение.");
       } else {
-        window.__app_autoupdate_last = "install-failed";
-        if (installResult && installResult.message) {
-          Prisma.Noty.show(String(installResult.message));
+        const installMessage = installResult && installResult.message ? String(installResult.message) : "";
+
+        if (isWindows && isLikelyPortableUpdateError(installMessage)) {
+          window.__app_autoupdate_last = "portable-manual-update";
+          Prisma.Noty.show(
+            "У вас portable-версия Prisma. Автообновление не поддерживается, скачайте новую версию с GitHub Releases.",
+          );
+          window.desktopAPI.external.open(releasesUrl).catch(() => {});
+          return;
         }
+
+        window.__app_autoupdate_last = "install-failed";
+        if (installMessage) Prisma.Noty.show(installMessage);
       }
     } catch (error) {
       window.__app_autoupdate_last = "error";
       console.warn("APP auto update failed:", error);
     }
   }
-
   async function initTsAutoStart() {
     if (window.__ts_autostart_done) return;
     window.__ts_autostart_done = true;
