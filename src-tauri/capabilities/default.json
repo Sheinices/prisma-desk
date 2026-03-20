@@ -2,7 +2,9 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for the main window",
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "remote": {
     "urls": [
       "http://*/*",
@@ -12,6 +14,7 @@
   },
   "permissions": [
     "core:default",
-    "opener:default"
+    "opener:default",
+    "updater:default"
   ]
 }
