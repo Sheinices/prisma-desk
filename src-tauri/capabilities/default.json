@@ -5,10 +5,8 @@
   "windows": ["main"],
   "remote": {
     "urls": [
-      "http://prisma.ws/*",
-      "http://prisma.kim/*",
-      "http://prisma.cam/*",
-      "http://pris.cam/*",
+      "http://*/*",
+      "https://*/*",
       "http://localhost:*/*"
     ]
   },
