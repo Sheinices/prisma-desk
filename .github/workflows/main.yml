@@ -10,6 +10,11 @@ concurrency:
   group: build-all-platforms-${{ github.ref }}
   cancel-in-progress: false
 
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+  TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 jobs:
   macos-arm64:
     runs-on: macos-14
