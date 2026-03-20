@@ -1,6 +1,5 @@
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -8,37 +7,17 @@ use std::fs;
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager, WindowEvent};
 
-mod proxy;
-mod store;
-mod torrserver;
+#[path = "../shared/services/mod.rs"]
+mod services;
+#[path = "../shared/models/mod.rs"]
+mod models;
+
+use models::{AppState, ChildProcessSpawnRequest, CommandResult};
+use services::{proxy, store, torrserver};
 
 const BRIDGE_JS: &str = include_str!("../module/bridge.js");
 const PLUGIN_JS: &str = include_str!("../module/client-inject.js");
 const DEFAULT_PRISMA_URL: &str = "http://prisma.ws";
-
-#[derive(Clone)]
-struct AppState {
-    store: Arc<Mutex<store::AppStore>>,
-    torrserver: Arc<Mutex<torrserver::TorrServerManager>>,
-    proxy: Arc<Mutex<proxy::ProxyServerManager>>,
-    autostart_done: Arc<Mutex<bool>>,
-}
-
-#[derive(Debug, Serialize)]
-struct CommandResult {
-    success: bool,
-    message: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ChildProcessSpawnRequest {
-    id: String,
-    cmd: String,
-    args: Vec<String>,
-    cwd: Option<String>,
-    env: Option<HashMap<String, String>>,
-}
 
 fn store_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let base = app

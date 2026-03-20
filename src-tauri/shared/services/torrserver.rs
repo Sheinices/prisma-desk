@@ -10,7 +10,7 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::store;
+use crate::services::store;
 
 const GITHUB_API: &str = "https://api.github.com/repos/YouROK/TorrServer/releases/latest";
 
@@ -94,12 +94,27 @@ impl TorrServerManager {
         }
 
         if Self::is_port_open(ts_port) {
+            let info = match self.get_platform_info(app) {
+                Ok(info) => info,
+                Err(err) => return json!({ "success": false, "message": err }),
+            };
+
+            if !info.save_path.exists() {
+                let dl = self.download(app, store, None);
+                let installed = dl.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
+                if !installed {
+                    return dl;
+                }
+                self.executable_path = Some(info.save_path.clone());
+            }
+
             self.status = "running".into();
             return json!({
                 "success": true,
-                "message": "TorrServer уже запущен (внешний процесс)",
+                "message": "Порт TorrServer уже занят внешним процессом. Локальный бинарник установлен.",
                 "runningExternal": true,
-                "port": ts_port
+                "port": ts_port,
+                "installed": true
             });
         }
 
@@ -456,7 +471,22 @@ impl TorrServerManager {
 
         let target_version = version.unwrap_or_else(|| release.tag_name.clone());
 
-        let asset = match release.assets.iter().find(|a| a.name == info.exe_name) {
+        let expected_name = info.exe_name.clone();
+        let expected_stem = expected_name.trim_end_matches(".exe").to_string();
+
+        let asset = release
+            .assets
+            .iter()
+            .find(|a| a.name == expected_name)
+            .or_else(|| release.assets.iter().find(|a| a.name == expected_stem))
+            .or_else(|| {
+                release
+                    .assets
+                    .iter()
+                    .find(|a| a.name.starts_with(&expected_stem))
+            });
+
+        let asset = match asset {
             Some(asset) => asset,
             None => {
                 let available = release
@@ -468,8 +498,7 @@ impl TorrServerManager {
                 return json!({
                     "success": false,
                     "message": format!(
-                        "Не найден файл {} в релизе. Доступные файлы: {}",
-                        info.exe_name, available
+                        "Не найден файл TorrServer для платформы ({expected_name}). Доступные файлы: {available}",
                     )
                 });
             }
