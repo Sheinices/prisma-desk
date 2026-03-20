@@ -95,6 +95,28 @@
     }
   }
 
+  function normalizeVersion(version) {
+    return String(version || "")
+      .trim()
+      .replace(/^v/i, "")
+      .split("-")[0];
+  }
+
+  function compareVersions(left, right) {
+    const a = normalizeVersion(left).split(".").map((v) => Number.parseInt(v, 10) || 0);
+    const b = normalizeVersion(right).split(".").map((v) => Number.parseInt(v, 10) || 0);
+    const len = Math.max(a.length, b.length);
+
+    for (let i = 0; i < len; i += 1) {
+      const av = a[i] || 0;
+      const bv = b[i] || 0;
+      if (av > bv) return 1;
+      if (av < bv) return -1;
+    }
+
+    return 0;
+  }
+
   function ensureAboutModalStyles() {
     if (document.getElementById("app-about-modal-style")) return;
 
@@ -114,6 +136,18 @@
       .app-modal-about li {
         margin: 10px 0;
         line-height: 1.45;
+      }
+
+      .app-modal-about .app-version-state {
+        font-weight: 700;
+      }
+
+      .app-modal-about .app-version-state--ok {
+        color: #2ad164;
+      }
+
+      .app-modal-about .app-version-state--old {
+        color: #ff9f43;
       }
 
       .app-modal-about .github {
@@ -475,9 +509,9 @@
         uk: "Остання версія: {latest_version}",
       },
       app_about_version_prisma: {
-        ru: "Версия Prisma: {prisma_version}",
-        en: "Prisma version: {prisma_version}",
-        uk: "Версія Prisma: {prisma_version}",
+        ru: "Версия клиентского кода: {prisma_version}",
+        en: "Client version: {prisma_version}",
+        uk: "Версія клієнтського коду: {prisma_version}",
       },
       app_about_github: {
         ru: "Github",
@@ -655,6 +689,11 @@
                   .getAppVersion()
                   .then((current_version) => {
                     const latest_version = data.tag_name.replace("v", "");
+                    const versionCompare = compareVersions(current_version, latest_version);
+                    const currentVersionClass =
+                      versionCompare >= 0 ? "app-version-state app-version-state--ok" : "app-version-state app-version-state--old";
+                    const latestVersionStateText =
+                      versionCompare >= 0 ? " (актуально)" : " (доступно обновление)";
 
                     Prisma.Template.add(
                       "about_modal",
@@ -666,13 +705,16 @@
                             <li>` +
                         Prisma.Lang.translate("app_about_version_app").replace(
                           "{current_version}",
-                          current_version,
+                          `<span class="${currentVersionClass}">${current_version}</span>`,
                         ) +
                         `</li>
                             <li>` +
                         Prisma.Lang.translate(
                           "app_about_version_latest",
-                        ).replace("{latest_version}", latest_version) +
+                        ).replace(
+                          "{latest_version}",
+                          `<span class="app-version-state app-version-state--ok">${latest_version}</span>${latestVersionStateText}`,
+                        ) +
                         `</li>
                             <li>` +
                         Prisma.Lang.translate("app_about_version_prisma").replace(
