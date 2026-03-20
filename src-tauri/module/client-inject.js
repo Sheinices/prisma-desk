@@ -1926,10 +1926,99 @@
   function bindHeadExitToDesktopClose() {
     const closeApp = () => window.desktopAPI.closeApp();
 
-    const bind = () => {
+    const backIcon = `
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M15.53 4.47L8 12L15.53 19.53" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M22 12H8.21" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    `;
+
+    const goBack = () => {
+      try {
+        const activityOut = window.Activity && typeof window.Activity.out === "function"
+          ? window.Activity.out
+          : window.Prisma && Prisma.Activity && typeof Prisma.Activity.out === "function"
+            ? Prisma.Activity.out
+            : null;
+
+        if (activityOut) {
+          activityOut();
+          return;
+        }
+      } catch {
+        // noop
+      }
+
+      const target = document.activeElement && document.activeElement !== document.body
+        ? document.activeElement
+        : document;
+
+      try {
+        const ev = new KeyboardEvent("keydown", {
+          key: "Backspace",
+          code: "Backspace",
+          keyCode: 8,
+          which: 8,
+          bubbles: true,
+          cancelable: true,
+        });
+        target.dispatchEvent(ev);
+      } catch {
+        // noop
+      }
+
+      if (window.history.length > 1) {
+        window.history.back();
+      }
+    };
+
+    const ensureBackButtons = () => {
+      if (!document.getElementById("desktop-back-button-style")) {
+        const style = document.createElement("style");
+        style.id = "desktop-back-button-style";
+        style.textContent = `
+          .open--back {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+          }
+
+          .open--back svg {
+            display: block;
+            width: 24px;
+            height: 24px;
+          }
+        `;
+        document.head.appendChild(style);
+      }
+
       const exitButtons = document.querySelectorAll(".open--exit");
       if (!exitButtons.length) return;
 
+      exitButtons.forEach((exitButton) => {
+        const parent = exitButton.parentElement;
+        if (!parent) return;
+
+        let backButton = parent.querySelector(".open--back");
+        if (!backButton) {
+          backButton = document.createElement("div");
+          backButton.className = "head__action selector open--back";
+          backButton.innerHTML = backIcon;
+
+          const searchButton = parent.querySelector(".open--search");
+          if (searchButton) {
+            searchButton.insertAdjacentElement("beforebegin", backButton);
+          } else {
+            exitButton.insertAdjacentElement("beforebegin", backButton);
+          }
+        }
+      });
+    };
+
+    const bind = () => {
+      ensureBackButtons();
+
+      const exitButtons = document.querySelectorAll(".open--exit");
       exitButtons.forEach((button) => {
         if (button.dataset.desktopExitBound === "1") return;
 
@@ -1944,6 +2033,23 @@
           closeApp();
         });
         button.dataset.desktopExitBound = "1";
+      });
+
+      const backButtons = document.querySelectorAll(".open--back");
+      backButtons.forEach((button) => {
+        if (button.dataset.desktopBackBound === "1") return;
+
+        const $button = $(button);
+        $button.off("hover:enter");
+        $button.on("hover:enter", goBack);
+        $button.on("click", (event) => {
+          if (window.DeviceInput) {
+            const nativeEvent = event?.originalEvent || event;
+            if (!window.DeviceInput.canClick(nativeEvent)) return;
+          }
+          goBack();
+        });
+        button.dataset.desktopBackBound = "1";
       });
     };
 
@@ -2168,6 +2274,11 @@
       );
     };
 
+    const showLongPortableNotice = (message) => {
+      Prisma.Noty.show(message);
+      setTimeout(() => Prisma.Noty.show(message), 2500);
+    };
+
     try {
       let enabled = false;
 
@@ -2190,7 +2301,7 @@
         const appInfo = await window.desktopAPI.appUpdater.info();
         if (appInfo && appInfo.portable) {
           window.__app_autoupdate_last = "portable-skip";
-          Prisma.Noty.show(
+          showLongPortableNotice(
             "У вас portable-версия Prisma. Автообновление отключено, скачайте новую версию с GitHub Releases.",
           );
           return;
@@ -2217,7 +2328,7 @@
 
         if (isWindows && isLikelyPortableUpdateError(installMessage)) {
           window.__app_autoupdate_last = "portable-manual-update";
-          Prisma.Noty.show(
+          showLongPortableNotice(
             "У вас portable-версия Prisma. Автообновление не поддерживается, скачайте новую версию с GitHub Releases.",
           );
           window.desktopAPI.external.open(releasesUrl).catch(() => {});
