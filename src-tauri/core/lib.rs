@@ -128,6 +128,54 @@ fn get_app_version(app: tauri::AppHandle) -> String {
 }
 
 #[tauri::command]
+fn app_installation_info() -> Value {
+    #[cfg(target_os = "windows")]
+    {
+        let exe_path = std::env::current_exe().ok();
+
+        if let Some(exe) = exe_path {
+            let dir = exe.parent().map(PathBuf::from).unwrap_or_default();
+            let has_uninstaller = dir.join("uninstall.exe").exists();
+
+            let in_program_files = {
+                let mut result = false;
+
+                if let Ok(pf) = std::env::var("ProgramFiles") {
+                    result = result || exe.starts_with(std::path::Path::new(&pf));
+                }
+
+                if let Ok(pf86) = std::env::var("ProgramFiles(x86)") {
+                    result = result || exe.starts_with(std::path::Path::new(&pf86));
+                }
+
+                result
+            };
+
+            let portable = !has_uninstaller && !in_program_files;
+
+            return json!({
+                "portable": portable,
+                "hasUninstaller": has_uninstaller,
+                "inProgramFiles": in_program_files,
+                "path": exe.to_string_lossy().to_string()
+            });
+        }
+
+        return json!({
+            "portable": true,
+            "path": null
+        });
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        json!({
+            "portable": false
+        })
+    }
+}
+
+#[tauri::command]
 async fn app_check_update(app: tauri::AppHandle) -> Result<Value, String> {
     use tauri_plugin_updater::UpdaterExt;
 
@@ -1018,6 +1066,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_app_version,
+            app_installation_info,
             app_check_update,
             app_install_update,
             store_get,

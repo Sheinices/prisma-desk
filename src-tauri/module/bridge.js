@@ -163,6 +163,11 @@
     getAppVersion: () => invoke("get_app_version"),
 
     appUpdater: {
+      info: () =>
+        invoke("app_installation_info").catch((e) => ({
+          portable: false,
+          message: String(e),
+        })),
       check: () =>
         invoke("app_check_update").catch((e) => ({
           available: false,

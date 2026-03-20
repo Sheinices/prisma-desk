@@ -2186,6 +2186,17 @@
         return;
       }
 
+      if (isWindows && window.desktopAPI.appUpdater.info) {
+        const appInfo = await window.desktopAPI.appUpdater.info();
+        if (appInfo && appInfo.portable) {
+          window.__app_autoupdate_last = "portable-skip";
+          Prisma.Noty.show(
+            "У вас portable-версия Prisma. Автообновление отключено, скачайте новую версию с GitHub Releases.",
+          );
+          return;
+        }
+      }
+
       const checkResult = await window.desktopAPI.appUpdater.check();
       if (!checkResult || !checkResult.available) {
         window.__app_autoupdate_last = "no-updates";
