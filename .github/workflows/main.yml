@@ -40,7 +40,7 @@ jobs:
 
       - name: Import Apple certificate
         run: |
-          echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
+          echo "$APPLE_CERTIFICATE" | base64 -D > certificate.p12
           security create-keychain -p "" build.keychain
           security set-keychain-settings -lut 21600 build.keychain
           security unlock-keychain -p "" build.keychain
@@ -93,7 +93,7 @@ jobs:
 
       - name: Import Apple certificate
         run: |
-          echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
+          echo "$APPLE_CERTIFICATE" | base64 -D > certificate.p12
           security create-keychain -p "" build.keychain
           security set-keychain-settings -lut 21600 build.keychain
           security unlock-keychain -p "" build.keychain
