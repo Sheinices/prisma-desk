@@ -17,7 +17,9 @@ use services::{player, proxy, store, torrserver};
 
 const BRIDGE_JS: &str = include_str!("../module/bridge.js");
 const PLUGIN_JS: &str = include_str!("../module/client-inject.js");
+const MIRROR_MODAL_JS: &str = include_str!("../module/mirror-modal.js");
 const DEFAULT_PRISMA_URL: &str = "http://prisma.ws";
+const MIRROR_MENU_ID: &str = "prisma-mirror";
 const MIN_WINDOW_WIDTH: u32 = 800;
 const MIN_WINDOW_HEIGHT: u32 = 600;
 
@@ -255,12 +257,7 @@ fn store_set(
             }
 
             if let Some(window) = app.get_webview_window("main") {
-                let script = format!(
-                    "window.location.href = {}",
-                    serde_json::to_string(&sanitized)
-                        .unwrap_or_else(|_| "\"http://prisma.ws\"".into())
-                );
-                let _ = window.eval(&script);
+                let _ = navigate_window(&window, &sanitized);
             }
         }
     }
@@ -334,6 +331,113 @@ fn load_url(window: tauri::WebviewWindow, url: String) -> Result<(), String> {
     window
         .eval(&script)
         .map_err(|e| format!("failed to navigate: {e}"))
+}
+
+fn normalize_mirror_url(url: &str) -> String {
+    let trimmed = url.trim().trim_end_matches('/');
+
+    if trimmed.is_empty() {
+        return DEFAULT_PRISMA_URL.to_string();
+    }
+
+    if trimmed.contains("://") {
+        trimmed.to_string()
+    } else {
+        format!("http://{trimmed}")
+    }
+}
+
+fn navigate_window(window: &tauri::WebviewWindow, url: &str) -> Result<(), String> {
+    let parsed = tauri::Url::parse(url).map_err(|e| format!("некорректный адрес: {e}"))?;
+
+    window
+        .navigate(parsed)
+        .map_err(|e| format!("не удалось открыть адрес: {e}"))
+}
+
+#[tauri::command]
+fn mirror_state(state: tauri::State<'_, AppState>) -> Value {
+    let url = get_store_value(&state, "prismaUrl")
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_else(|| DEFAULT_PRISMA_URL.to_string());
+
+    let confirmed = get_store_value(&state, "mirrorConfirmed")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    json!({
+        "url": sanitize_prisma_url(&url),
+        "confirmed": confirmed,
+        "default": DEFAULT_PRISMA_URL
+    })
+}
+
+#[tauri::command]
+async fn mirror_check(url: String) -> Value {
+    let target = normalize_mirror_url(&url);
+
+    if tauri::Url::parse(&target).is_err() {
+        return json!({ "ok": false, "url": target, "message": "Некорректный адрес" });
+    }
+
+    let request_url = target.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(8))
+            .build()
+            .map_err(|e| e.to_string())?;
+
+        client
+            .get(&request_url)
+            .send()
+            .map(|response| response.status().as_u16())
+            .map_err(|e| e.to_string())
+    })
+    .await;
+
+    match result {
+        Ok(Ok(status)) if status < 400 => json!({
+            "ok": true,
+            "url": target,
+            "status": status,
+            "message": format!("Зеркало доступно ({status})")
+        }),
+        Ok(Ok(status)) => json!({
+            "ok": false,
+            "url": target,
+            "status": status,
+            "message": format!("Зеркало ответило ошибкой {status}")
+        }),
+        Ok(Err(err)) => json!({
+            "ok": false,
+            "url": target,
+            "message": format!("Зеркало недоступно: {err}")
+        }),
+        Err(err) => json!({
+            "ok": false,
+            "url": target,
+            "message": format!("Ошибка проверки: {err}")
+        }),
+    }
+}
+
+#[tauri::command]
+fn mirror_apply(
+    window: tauri::WebviewWindow,
+    url: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Value, String> {
+    let target = sanitize_prisma_url(&normalize_mirror_url(&url));
+
+    {
+        let mut store = state.store.lock().expect("store poisoned");
+        store.set("prismaUrl".into(), Value::String(target.clone()))?;
+        store.set("mirrorConfirmed".into(), Value::Bool(true))?;
+    }
+
+    navigate_window(&window, &target)?;
+
+    Ok(json!({ "success": true, "url": target }))
 }
 
 #[tauri::command]
@@ -869,6 +973,13 @@ async fn torrserver_is_installed(
     }
 }
 
+fn is_local_page(url: &tauri::Url) -> bool {
+    match url.scheme() {
+        "tauri" | "asset" | "file" => true,
+        _ => matches!(url.host_str(), Some(host) if host.ends_with("tauri.localhost")),
+    }
+}
+
 fn inject_plugin(window: &tauri::Webview) {
     let plugin_code = match serde_json::to_string(PLUGIN_JS) {
         Ok(v) => v,
@@ -1020,6 +1131,39 @@ fn initialize_prisma_defaults(window: &tauri::Webview, state: &tauri::State<'_, 
     let _ = window.eval(&script);
 }
 
+fn build_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem, Submenu};
+
+    let mirror_item = MenuItem::with_id(
+        app,
+        MIRROR_MENU_ID,
+        "Сменить зеркало…",
+        true,
+        Some("CmdOrCtrl+Shift+M"),
+    )?;
+
+    // macOS: добавляем пункт в системную строку меню рядом со стандартными.
+    #[cfg(target_os = "macos")]
+    {
+        let menu = Menu::default(app)?;
+        menu.append(&Submenu::with_items(app, "Зеркало", true, &[&mirror_item])?)?;
+        app.set_menu(menu)?;
+    }
+
+    // Windows/Linux: меню окна под заголовком, нативные кнопки окна остаются на месте.
+    #[cfg(not(target_os = "macos"))]
+    {
+        let menu = Menu::with_items(
+            app,
+            &[&Submenu::with_items(app, "Prisma", true, &[&mirror_item])?],
+        )?;
+
+        app.set_menu(menu)?;
+    }
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1031,6 +1175,13 @@ pub fn run() {
                 let _ = window.set_focus();
             }
         }))
+        .on_menu_event(|app, event| {
+            if event.id() == MIRROR_MENU_ID {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.eval("window.__prismaMirror && window.__prismaMirror.open()");
+                }
+            }
+        })
         .setup(|app| {
             let path = store_path(&app.handle())?;
             let store = store::AppStore::load(path);
@@ -1052,21 +1203,17 @@ pub fn run() {
             let state = app.state::<AppState>();
 
             apply_initial_window_state(&window, &state);
+            build_app_menu(&app.handle())?;
 
+            // Стартовая страница: локальный экран выбора зеркала (web/index.html).
+            // Он сам проверяет сохранённый адрес и переходит на него, если тот доступен.
             if let Some(Value::String(url)) = get_store_value(&state, "prismaUrl") {
                 let sanitized = sanitize_prisma_url(&url);
 
                 if sanitized != url {
                     let mut store = state.store.lock().expect("store poisoned");
-                    let _ = store.set("prismaUrl".into(), Value::String(sanitized.clone()));
+                    let _ = store.set("prismaUrl".into(), Value::String(sanitized));
                 }
-
-                let script = format!(
-                    "if (window.location.href !== {0}) window.location.href = {0};",
-                    serde_json::to_string(&sanitized)
-                        .unwrap_or_else(|_| "\"http://prisma.ws\"".into())
-                );
-                let _ = window.eval(&script);
             }
 
             let app_handle_for_events = app.handle().clone();
@@ -1087,7 +1234,15 @@ pub fn run() {
 
             Ok(())
         })
-        .on_page_load(|window, _payload| {
+        .on_page_load(|window, payload| {
+            let _ = window.eval(BRIDGE_JS);
+            let _ = window.eval(MIRROR_MODAL_JS);
+
+            // Локальный экран выбора зеркала не нуждается в инжекте клиента Prisma.
+            if is_local_page(payload.url()) {
+                return;
+            }
+
             let state = window.app_handle().state::<AppState>();
             initialize_prisma_defaults(window, &state);
 
@@ -1137,7 +1292,6 @@ pub fn run() {
                 });
             }
 
-            let _ = window.eval(BRIDGE_JS);
             inject_plugin(window);
         })
         .invoke_handler(tauri::generate_handler![
@@ -1153,6 +1307,9 @@ pub fn run() {
             toggle_fullscreen,
             close_app,
             load_url,
+            mirror_state,
+            mirror_check,
+            mirror_apply,
             fs_exists_sync,
             child_process_spawn,
             open_folder,

@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "Prisma"
-version = "1.1.0"
+version = "1.2.2"
 dependencies = [
  "reqwest 0.12.28",
  "rfd",
@@ -17,6 +17,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tiny_http",
  "which",
+ "winreg",
 ]
 
 [[package]]

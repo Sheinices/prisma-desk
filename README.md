@@ -6,6 +6,8 @@ Prisma Desktop на **Tauri v2 + Rust**.
 
 ## Возможности
 - Смена зеркала Prisma (`http://prisma.ws` по умолчанию)
+- Экран выбора зеркала при первом запуске и при недоступности сохранённого адреса
+- Пункт меню «Сменить зеркало…» (⌘⇧M / Ctrl+Shift+M) открывает модаль смены адреса
 - Desktop bridge/inject для клиентского кода
 - Встроенный TorrServer: установка, запуск, остановка, статус, обновление, удаление
 - Запуск внешних плееров
@@ -22,6 +24,8 @@ Prisma Desktop на **Tauri v2 + Rust**.
 - `src-tauri/core/` — Rust backend и Tauri команды
 - `src-tauri/module/bridge.js` — bridge API для WebView
 - `src-tauri/module/client-inject.js` — клиентский inject
+- `src-tauri/module/mirror-modal.js` — модаль смены зеркала
+- `web/index.html` — стартовый экран выбора зеркала
 - `src-tauri/capabilities/default.json` — permissions и remote URLs
 - `src-tauri/macos-info.plist` — ATS настройки для macOS
 - `.github/workflows/main.yml` — сборка артефактов (all platforms)

@@ -16,8 +16,16 @@ impl AppStore {
 
         if let Ok(raw) = fs::read_to_string(&path) {
             if let Ok(Value::Object(existing)) = serde_json::from_str::<Value>(&raw) {
+                // Старые установки уже работали с выбранным зеркалом
+                // не показываем им экран первого запуска.
+                let migrated = !existing.contains_key("mirrorConfirmed");
+
                 for (k, v) in existing {
                     data.insert(k, v);
+                }
+
+                if migrated {
+                    data.insert("mirrorConfirmed".into(), json!(true));
                 }
             }
         }
@@ -70,6 +78,7 @@ fn default_store() -> Map<String, Value> {
     let mut map = Map::new();
 
     map.insert("prismaUrl".into(), json!("http://prisma.ws"));
+    map.insert("mirrorConfirmed".into(), json!(false));
     map.insert("fullscreen".into(), json!(false));
     map.insert("autoUpdate".into(), json!(true));
     map.insert("windowState".into(), json!({}));
