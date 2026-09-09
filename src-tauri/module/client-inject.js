@@ -482,14 +482,14 @@
 
       // Плееры
       app_settings_player_find: {
-        ru: "Поиск плеера",
-        en: "Player search",
-        uk: "Пошук плеєра",
+        ru: "Внешний проигрыватель",
+        en: "External player",
+        uk: "Зовнішній програвач",
       },
       app_settings_player_find_description: {
-        ru: "Автоматически найти VLC",
-        en: "Auto-detect VLC",
-        uk: "Автоматично знайти VLC",
+        ru: "Выбрать VLC, PotPlayer или другой плеер",
+        en: "Choose VLC, PotPlayer, or another player",
+        uk: "Вибрати VLC, PotPlayer або інший програвач",
       },
 
       // О приложении
@@ -587,15 +587,10 @@
           () => {},
           `${Prisma.Lang.translate("app_settings_player_find")}...`,
         );
-        const result = await window.desktopAPI.findPlayer();
+        await configureExternalPlayer();
         Prisma.Loading.stop();
         // Prisma.Settings.create("player", {});
         Prisma.Settings.update();
-        Prisma.Noty.show(
-          result.success
-            ? result.message
-            : `${Prisma.Lang.translate("app_error")}: ${result.message}`,
-        );
       },
       onRender: function (element) {
         setTimeout(function () {
@@ -811,13 +806,8 @@
               () => {},
               `${Prisma.Lang.translate("app_settings_player_find")}...`,
             );
-            const result = await window.desktopAPI.findPlayer();
+            await configureExternalPlayer();
             Prisma.Loading.stop();
-            Prisma.Noty.show(
-              result.success
-                ? result.message
-                : `${Prisma.Lang.translate("app_error")}: ${result.message}`,
-            );
           },
         })
         .addToQueue({
@@ -2155,6 +2145,394 @@
     window.__desktop_protocol_patch_applied = true;
   }
 
+  const EXTERNAL_PROGRESS_KEY = "prisma_desktop_external_progress_v1";
+  const EXTERNAL_PROGRESS_SAVE_INTERVAL_MS = 10000;
+  const EXTERNAL_PROGRESS_MIN_DELTA_SEC = 5;
+  const EXTERNAL_PLAYER_START_GRACE_MS = 30000;
+  const EXTERNAL_WATCHED_RATIO = 0.92;
+  const EXTERNAL_WATCHED_REMAINING_SEC = 10;
+  const EXTERNAL_DIAGNOSTICS_KEY = "prisma_desktop_external_progress_diagnostics_v1";
+  const externalDiagnostics = {
+    startedAt: new Date().toISOString(),
+    sessionCount: 0,
+    readCount: 0,
+    successfulReads: 0,
+    failedReads: 0,
+    fallbackWindowReads: 0,
+    timelineUpdates: 0,
+    finalFlushes: 0,
+    lastResumePositionSec: 0,
+    inputTimelineHash: null,
+    inputDataKeys: [],
+    inputEpisode: null,
+    inputSeason: null,
+    lastState: null,
+    lastTimelineUpdate: null,
+    lastError: null,
+  };
+
+  function publishExternalDiagnostics() {
+    try {
+      const snapshot = JSON.parse(JSON.stringify(externalDiagnostics));
+      window.__desktop_external_progress_diagnostics = snapshot;
+      localStorage.setItem(EXTERNAL_DIAGNOSTICS_KEY, JSON.stringify(snapshot));
+    } catch (error) {
+      console.warn("APP external diagnostics publish failed", error);
+    }
+  }
+
+  function safeJsonParse(value, fallback) {
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === "object" ? parsed : fallback;
+    } catch {
+      return fallback;
+    }
+  }
+
+  function externalPlayerPathLooksPotPlayer(path) {
+    return /(?:^|[\\\\/])PotPlayer(?:Mini64|Mini|64)?\\.exe$/i.test(String(path || ""));
+  }
+
+  function externalTimelineHash(data, mode) {
+    if (mode === "iptv" || !Prisma?.Timeline) return null;
+    const suppliedHash = Number(data?.timeline?.hash ?? data?.timeline_hash ?? data?.timelineHash);
+    if (Number.isFinite(suppliedHash) && suppliedHash !== 0) return suppliedHash;
+    if (!Prisma?.Utils?.hash) return null;
+    const source = data?.movie || data?.card || data || {};
+    const title = source.original_title || source.original_name || source.title;
+    if (!title) return null;
+
+    const season = Number(source.season_number ?? source.season ?? data?.season_number ?? data?.season);
+    const episode = Number(source.episode_number ?? source.episode ?? data?.episode_number ?? data?.episode);
+    if (source.original_name || data?.original_name || (Number.isFinite(season) && Number.isFinite(episode))) {
+      if (Number.isFinite(season) && Number.isFinite(episode)) {
+        return Number(Prisma.Utils.hash([
+          season,
+          season > 10 ? ":" : "",
+          episode,
+          source.original_name || data?.original_name || title,
+        ].join("")));
+      }
+    }
+    return Number(Prisma.Utils.hash(String(source.original_title || title)));
+  }
+
+  function externalMediaKey(data, mode) {
+    const timelineHash = externalTimelineHash(data, mode);
+    if (Number.isFinite(timelineHash)) return `timeline:${timelineHash}`;
+    const raw = data && (
+      data.id || data.media_id || data.movie_id || data.episode_id ||
+      data.kinopoisk_id || data.imdb_id || data.tmdb_id || data.url
+    );
+    const value = `${mode || "play"}:${String(raw || "unknown")}`;
+    let hash = 2166136261;
+    for (let index = 0; index < value.length; index += 1) {
+      hash ^= value.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return `external:${(hash >>> 0).toString(16)}`;
+  }
+
+  function readExternalProgress() {
+    try {
+      return safeJsonParse(localStorage.getItem(EXTERNAL_PROGRESS_KEY) || "{}", {});
+    } catch {
+      return {};
+    }
+  }
+
+  function writeExternalProgress(allProgress) {
+    const serialized = JSON.stringify(allProgress);
+    try {
+      localStorage.setItem(EXTERNAL_PROGRESS_KEY, serialized);
+    } catch (error) {
+      console.warn("APP external progress localStorage write failed", error);
+    }
+
+    try {
+      if (window.Prisma?.Storage) {
+        Prisma.Storage.set(EXTERNAL_PROGRESS_KEY, serialized);
+      }
+    } catch (error) {
+      console.warn("APP Prisma external progress write failed", error);
+    }
+
+    if (window.desktopAPI?.store?.set) {
+      window.desktopAPI.store.set(EXTERNAL_PROGRESS_KEY, allProgress).catch(() => {});
+    }
+  }
+
+  const externalProgressManager = {
+    state: null,
+    timer: null,
+    stopping: false,
+
+    read(key) {
+      const all = readExternalProgress();
+      const item = all[key];
+      return item && typeof item === "object" ? item : null;
+    },
+
+    resumePosition(key, timelineHash = null) {
+      const item = this.read(key);
+      const timelineView = Number.isFinite(Number(timelineHash)) && Prisma?.Timeline?.view
+        ? Prisma.Timeline.view(Number(timelineHash))
+        : null;
+      if (item?.watched || Number(timelineView?.percent) >= 100) return 0;
+      if (item && Number.isFinite(Number(item.positionSec)) && Number(item.positionSec) >= 3) {
+        return Number(item.positionSec);
+      }
+      const timelinePosition = Number(timelineView?.time);
+      return Number.isFinite(timelinePosition) && timelinePosition >= 3 ? timelinePosition : 0;
+    },
+
+    persist(final = false) {
+      if (!this.state || !Number.isFinite(this.state.positionSec) || this.state.positionSec < 0) return;
+
+      const now = Date.now();
+      const elapsed = now - this.state.lastSavedAt;
+      const moved = Math.abs(this.state.positionSec - this.state.lastSavedPositionSec);
+      if (!final && elapsed < EXTERNAL_PROGRESS_SAVE_INTERVAL_MS && moved < EXTERNAL_PROGRESS_MIN_DELTA_SEC) {
+        return;
+      }
+
+      const duration = Number(this.state.durationSec);
+      const position = Math.max(0, this.state.positionSec);
+      const hasDuration = Number.isFinite(duration) && duration > 0;
+      const watched = hasDuration && (
+        position / duration >= EXTERNAL_WATCHED_RATIO ||
+        duration - position <= EXTERNAL_WATCHED_REMAINING_SEC
+      );
+      if (Number.isFinite(Number(this.state.timelineHash)) && hasDuration) {
+        try {
+          const timelineUpdate = {
+            hash: Number(this.state.timelineHash),
+            percent: watched ? 100 : Math.min(100, Math.max(0, position / duration * 100)),
+            time: watched ? duration : position,
+            duration,
+          };
+          let saveMethod = "timeline_update";
+          if (typeof this.state.timeline?.handler === "function") {
+            this.state.timeline.handler(timelineUpdate.percent, timelineUpdate.time, timelineUpdate.duration);
+            saveMethod = "timeline_handler";
+          } else if (Prisma?.Timeline?.update) {
+            Prisma.Timeline.update(timelineUpdate);
+          } else {
+            throw new Error("Prisma Timeline API unavailable");
+          }
+          externalDiagnostics.timelineUpdates += 1;
+          externalDiagnostics.lastTimelineUpdate = {
+            ...timelineUpdate,
+            saveMethod,
+            at: new Date().toISOString(),
+          };
+          publishExternalDiagnostics();
+        } catch (error) {
+          externalDiagnostics.lastError = `timeline_update: ${String(error)}`;
+          publishExternalDiagnostics();
+          console.warn("APP Prisma Timeline update failed", error);
+        }
+      }
+
+      const all = readExternalProgress();
+      all[this.state.key] = {
+        key: this.state.key,
+        timelineHash: this.state.timelineHash || null,
+        mediaId: this.state.mediaId || null,
+        episodeId: this.state.episodeId || null,
+        url: this.state.url,
+        positionSec: watched ? 0 : position,
+        lastPositionSec: position,
+        durationSec: hasDuration ? duration : null,
+        watched,
+        updatedAt: new Date().toISOString(),
+        player: "potplayer",
+      };
+      writeExternalProgress(all);
+      this.state.lastSavedAt = now;
+      this.state.lastSavedPositionSec = position;
+
+      if (watched && !this.state.watchedNotified) {
+        this.state.watchedNotified = true;
+        try {
+          Prisma.Noty?.show("Просмотр отмечен как завершённый");
+        } catch {
+          // noop
+        }
+      }
+    },
+
+    stop() {
+      if (this.timer) clearTimeout(this.timer);
+      this.timer = null;
+      if (this.state) {
+        this.persist(true);
+        externalDiagnostics.finalFlushes += 1;
+        publishExternalDiagnostics();
+      }
+      this.state = null;
+      this.stopping = false;
+    },
+
+    schedule() {
+      if (!this.state || this.stopping) return;
+      this.timer = setTimeout(async () => {
+        this.timer = null;
+        if (!this.state || this.stopping) return;
+
+        const state = await window.desktopAPI.player.readState(this.state.pid);
+        externalDiagnostics.readCount += 1;
+        externalDiagnostics.lastState = state || null;
+        if (state?.fallbackUsed) externalDiagnostics.fallbackWindowReads += 1;
+        if (state?.success && Number.isFinite(Number(state.positionSec))) {
+          externalDiagnostics.successfulReads += 1;
+          this.state.positionSec = Math.max(0, Number(state.positionSec));
+          if (Number.isFinite(Number(state.durationSec)) && Number(state.durationSec) > 0) {
+            this.state.durationSec = Number(state.durationSec);
+          }
+          this.state.status = state.status || "unknown";
+          this.persist(false);
+        } else {
+          externalDiagnostics.failedReads += 1;
+          externalDiagnostics.lastError = state?.reason || "ipc_unknown_failure";
+          const waitingForWindow = state?.reason === "window_not_found" &&
+            Date.now() - this.state.startedAt < EXTERNAL_PLAYER_START_GRACE_MS;
+          if (waitingForWindow) {
+            publishExternalDiagnostics();
+            this.schedule();
+            return;
+          }
+          if (["window_not_found", "window_closed"].includes(state?.reason)) {
+            this.persist(true);
+            this.stop();
+            return;
+          }
+        }
+        publishExternalDiagnostics();
+        this.schedule();
+      }, 2000);
+    },
+
+    attach({ data, mode, pid, url, key, resumePositionSec = 0, timelineHash = null, timeline = null }) {
+      this.stop();
+      externalDiagnostics.sessionCount += 1;
+      const previous = this.read(key);
+      this.state = {
+        key,
+        mediaId: data?.id || data?.media_id || data?.movie_id || null,
+        episodeId: data?.episode_id || null,
+        url,
+        pid,
+        mode,
+        timeline: timeline && typeof timeline === "object" ? timeline : null,
+        timelineHash: Number.isFinite(Number(timelineHash))
+          ? Number(timelineHash)
+          : (Number.isFinite(Number(previous?.timelineHash))
+            ? Number(previous.timelineHash)
+            : externalTimelineHash(data, mode)),
+        resumePositionSec: Number(resumePositionSec) || 0,
+        positionSec: Number(previous?.positionSec) || 0,
+        durationSec: Number(previous?.durationSec) || null,
+        lastSavedAt: 0,
+        lastSavedPositionSec: Number(previous?.positionSec) || 0,
+        watchedNotified: Boolean(previous?.watched),
+        status: "starting",
+        startedAt: Date.now(),
+      };
+      externalDiagnostics.lastResumePositionSec = Number(resumePositionSec) || 0;
+      externalDiagnostics.inputTimelineHash = this.state.timelineHash || null;
+      externalDiagnostics.inputDataKeys = data && typeof data === "object" ? Object.keys(data) : [];
+      externalDiagnostics.inputEpisode = data?.episode_number ?? data?.episode ?? data?.timeline?.episode ?? null;
+      externalDiagnostics.inputSeason = data?.season_number ?? data?.season ?? data?.timeline?.season ?? null;
+      publishExternalDiagnostics();
+      this.schedule();
+    },
+  };
+
+  function installExternalProgressLifecycle() {
+    if (window.__desktop_external_progress_lifecycle) return;
+    window.__desktop_external_progress_lifecycle = true;
+    window.addEventListener("pagehide", () => externalProgressManager.stop());
+    window.addEventListener("beforeunload", () => externalProgressManager.stop());
+    publishExternalDiagnostics();
+  }
+
+  async function configureExternalPlayer() {
+    if (!window.desktopAPI?.player) return;
+
+    const currentPath = String(Prisma.Storage.field("player_nw_path") || localStorage.getItem("player_nw_path") || "");
+    const detected = await window.desktopAPI.player.detect(currentPath || null);
+    const preferred = detected?.preferred;
+    const currentId = String(
+      Prisma.Storage.field("player_torrent") ||
+      Prisma.Storage.field("player") ||
+      localStorage.getItem("player_torrent") ||
+      "other"
+    );
+    const currentSubtitle = currentPath || "Путь не задан";
+
+    const items = [
+      {
+        title: "PotPlayer x64",
+        subtitle: preferred?.path || "Автоопределение не найдено",
+        action: "potplayer",
+      },
+      {
+        title: "Выбрать PotPlayer вручную",
+        subtitle: currentId === "potplayer" ? currentSubtitle : "PotPlayerMini64.exe",
+        action: "potplayer-manual",
+      },
+      {
+        title: "VLC",
+        subtitle: "Сохранить текущую интеграцию VLC",
+        action: "vlc",
+      },
+      {
+        title: "Другой плеер",
+        subtitle: "Только запуск без чтения таймкодов",
+        action: "other",
+      },
+    ];
+
+    Prisma.Select.show({
+      title: "Внешний проигрыватель",
+      items,
+      onSelect: async (item) => {
+        let result = null;
+        let path = currentPath;
+        let playerId = item.action;
+
+        if (item.action === "potplayer") {
+          path = preferred?.path || currentPath;
+          result = await window.desktopAPI.player.validate(path);
+          playerId = "potplayer";
+        } else if (item.action === "potplayer-manual") {
+          result = await window.desktopAPI.player.choosePath();
+          if (result?.success) path = result.path;
+          playerId = "potplayer";
+        } else if (item.action === "vlc") {
+          playerId = "vlc";
+          result = await window.desktopAPI.findPlayer();
+          if (result?.success && result.path) path = String(result.path);
+          if (!result?.success) {
+            result = { success: false, message: "VLC не найден. Используйте поиск VLC или выберите другой плеер" };
+          }
+        } else {
+          playerId = "other";
+          result = { success: true, message: "Выбран обычный внешний плеер" };
+        }
+
+        if (result?.success) {
+          window.desktopAPI.setPlayerSelection(playerId, path);
+          Prisma.Settings.update();
+        }
+        if (result?.message && !result.cancelled) Prisma.Noty.show(result.message);
+      },
+      onBack: () => Prisma.Controller.toggle("settings_component"),
+    });
+  }
+
   function patchPlayerExternalLaunch() {
     if (!window.desktopAPI || !window.Prisma || !Prisma.Player || Prisma.Player.__desktopPatched) return;
 
@@ -2197,6 +2575,40 @@
       if (!safeUrl) return false;
 
       const playerPath = Prisma.Storage.field("player_nw_path");
+      const isPotPlayer =
+        isWindows() &&
+        (player === "potplayer" || externalPlayerPathLooksPotPlayer(playerPath));
+
+      if (isPotPlayer) {
+        const key = externalMediaKey(data, mode);
+        const timelineHash = externalTimelineHash(data, mode);
+        const resumePositionSec = externalProgressManager.resumePosition(key, timelineHash);
+        return window.desktopAPI.player
+          .start({
+            path: playerPath,
+            url: safeUrl,
+            resumePositionSec,
+          })
+          .then((result) => {
+            if (!result?.success) return false;
+            externalProgressManager.attach({
+              data,
+              mode,
+              pid: Number(result.pid),
+              url: safeUrl,
+              key,
+              timelineHash,
+              timeline: data?.timeline || null,
+              resumePositionSec,
+            });
+            return true;
+          })
+          .catch((error) => {
+            console.warn("APP PotPlayer launch failed", error);
+            return false;
+          });
+      }
+
       const useDirectSpawn =
         player === "other" ||
         (isWindows() && player === "vlc" && typeof playerPath === "string" && playerPath.length > 0);
@@ -2273,6 +2685,7 @@
     }
 
     Prisma.Player.__desktopPatched = true;
+    installExternalProgressLifecycle();
   }
   async function initAppAutoUpdate() {
     if (window.__app_autoupdate_done) return;

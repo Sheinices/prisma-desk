@@ -284,6 +284,71 @@
       open: (url) => invoke("open_external_url", { url }),
     },
 
+    player: {
+      detect: (pathHint = null) =>
+        invoke("player_detect", { pathHint: pathHint || null }).catch((error) => ({
+          success: false,
+          candidates: [],
+          message: String(error),
+        })),
+      choosePath: () =>
+        invoke("player_choose_path").catch((error) => ({
+          success: false,
+          cancelled: false,
+          message: String(error),
+        })),
+      validate: (path) =>
+        invoke("player_validate", { path: String(path || "") }).catch((error) => ({
+          success: false,
+          message: String(error),
+        })),
+      start: ({ path, url, resumePositionSec = 0 } = {}) =>
+        invoke("player_start", {
+          path: String(path || ""),
+          url: String(url || ""),
+          resumePositionSec: Number.isFinite(Number(resumePositionSec))
+            ? Number(resumePositionSec)
+            : null,
+        }),
+      readState: (pid = null) =>
+        invoke("player_read_state", { pid: pid == null ? null : Number(pid) }).catch((error) => ({
+          success: false,
+          reason: "bridge_error",
+          message: String(error),
+        })),
+      seek: (pid = null, positionMs = 0) =>
+        invoke("player_seek", {
+          pid: pid == null ? null : Number(pid),
+          positionMs: Math.max(0, Math.floor(Number(positionMs) || 0)),
+        }).catch((error) => ({
+          success: false,
+          reason: "bridge_error",
+          message: String(error),
+        })),
+    },
+
+    setPlayerSelection: (playerId, playerPath) => {
+      const id = String(playerId || "other");
+      const path = playerPath ? String(playerPath) : "";
+      try {
+        if (path) {
+          localStorage.setItem("player_nw_path", path);
+          if (window.Prisma?.Storage) window.Prisma.Storage.set("player_nw_path", path);
+        }
+        localStorage.setItem("player_torrent", id);
+        localStorage.setItem("player_iptv", id);
+        localStorage.setItem("player", id);
+        if (window.Prisma?.Storage) {
+          window.Prisma.Storage.set("player_torrent", id);
+          window.Prisma.Storage.set("player_iptv", id);
+          window.Prisma.Storage.set("player", id);
+        }
+      } catch (error) {
+        console.warn("APP player selection sync failed", error);
+      }
+      return { success: true, id, path };
+    },
+
     findPlayer: async () => {
       const result = await invoke("find_player");
       if (result?.success && result?.path) {

@@ -1,6 +1,6 @@
 [package]
 name = "Prisma"
-version = "1.2.1"
+version = "1.2.2"
 description = "Prisma Desktop"
 authors = ["you"]
 edition = "2021"
@@ -28,3 +28,6 @@ which = "8"
 reqwest = { version = "0.12", features = ["blocking", "json", "rustls-tls"] }
 rfd = "0.15"
 tiny_http = "0.12"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"

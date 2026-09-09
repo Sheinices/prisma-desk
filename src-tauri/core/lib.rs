@@ -1,23 +1,25 @@
 use serde_json::{json, Value};
 use std::collections::HashSet;
+use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::fs;
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager, WindowEvent};
 
-#[path = "../shared/services/mod.rs"]
-mod services;
 #[path = "../shared/models/mod.rs"]
 mod models;
+#[path = "../shared/services/mod.rs"]
+mod services;
 
 use models::{AppState, ChildProcessSpawnRequest, CommandResult};
-use services::{proxy, store, torrserver};
+use services::{player, proxy, store, torrserver};
 
 const BRIDGE_JS: &str = include_str!("../module/bridge.js");
 const PLUGIN_JS: &str = include_str!("../module/client-inject.js");
 const DEFAULT_PRISMA_URL: &str = "http://prisma.ws";
+const MIN_WINDOW_WIDTH: u32 = 800;
+const MIN_WINDOW_HEIGHT: u32 = 600;
 
 fn store_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let base = app
@@ -391,7 +393,8 @@ fn spawn_macos_app(
     std::thread::spawn(move || match child.wait() {
         Ok(status) => {
             let code = status.code().unwrap_or_default();
-            let _ = app_for_thread.emit(format!("child-process-spawn-exit-{id_exit}").as_str(), code);
+            let _ =
+                app_for_thread.emit(format!("child-process-spawn-exit-{id_exit}").as_str(), code);
         }
         Err(err) => {
             let _ = app_for_thread.emit(
@@ -407,7 +410,11 @@ fn spawn_macos_app(
 fn resolve_spawn_command(cmd: &str) -> Result<PathBuf, String> {
     let path_candidate = PathBuf::from(cmd);
 
-    if cmd.contains(std::path::MAIN_SEPARATOR) || path_candidate.is_absolute() || cmd.starts_with("./") || cmd.starts_with("../") {
+    if cmd.contains(std::path::MAIN_SEPARATOR)
+        || path_candidate.is_absolute()
+        || cmd.starts_with("./")
+        || cmd.starts_with("../")
+    {
         if path_candidate.exists() {
             return Ok(path_candidate);
         }
@@ -479,7 +486,10 @@ fn child_process_spawn(
         std::thread::spawn(move || {
             let reader = BufReader::new(stdout);
             for line in reader.lines().map_while(Result::ok) {
-                let _ = app_clone.emit(format!("child-process-spawn-stdout-{id_out}").as_str(), line);
+                let _ = app_clone.emit(
+                    format!("child-process-spawn-stdout-{id_out}").as_str(),
+                    line,
+                );
             }
         });
     }
@@ -490,7 +500,10 @@ fn child_process_spawn(
         std::thread::spawn(move || {
             let reader = BufReader::new(stderr);
             for line in reader.lines().map_while(Result::ok) {
-                let _ = app_clone.emit(format!("child-process-spawn-stderr-{id_err}").as_str(), line);
+                let _ = app_clone.emit(
+                    format!("child-process-spawn-stderr-{id_err}").as_str(),
+                    line,
+                );
             }
         });
     }
@@ -542,12 +555,20 @@ fn open_external_url(url: String) -> CommandResult {
 fn detect_vlc_path() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     {
-        let program_files = std::env::var("ProgramFiles").unwrap_or_else(|_| r"C:\Program Files".into());
-        let program_files_x86 = std::env::var("ProgramFiles(x86)").unwrap_or_else(|_| r"C:\Program Files (x86)".into());
+        let program_files =
+            std::env::var("ProgramFiles").unwrap_or_else(|_| r"C:\Program Files".into());
+        let program_files_x86 =
+            std::env::var("ProgramFiles(x86)").unwrap_or_else(|_| r"C:\Program Files (x86)".into());
 
         let candidates = [
-            std::path::Path::new(&program_files).join("VideoLAN").join("VLC").join("vlc.exe"),
-            std::path::Path::new(&program_files_x86).join("VideoLAN").join("VLC").join("vlc.exe"),
+            std::path::Path::new(&program_files)
+                .join("VideoLAN")
+                .join("VLC")
+                .join("vlc.exe"),
+            std::path::Path::new(&program_files_x86)
+                .join("VideoLAN")
+                .join("VLC")
+                .join("vlc.exe"),
             PathBuf::from(r"C:\Program Files\VideoLAN\VLC\vlc.exe"),
             PathBuf::from(r"C:\Program Files (x86)\VideoLAN\VLC\vlc.exe"),
         ];
@@ -594,6 +615,40 @@ fn find_player() -> Value {
 }
 
 #[tauri::command]
+fn player_detect(path_hint: Option<String>) -> Value {
+    player::detect(path_hint)
+}
+
+#[tauri::command]
+fn player_choose_path() -> Value {
+    player::choose_path()
+}
+
+#[tauri::command]
+fn player_validate(path: String) -> Value {
+    player::validate(path)
+}
+
+#[tauri::command]
+fn player_start(
+    path: String,
+    url: String,
+    resume_position_sec: Option<f64>,
+) -> Result<Value, String> {
+    player::start(path, url, resume_position_sec)
+}
+
+#[tauri::command]
+fn player_read_state(pid: Option<u32>) -> Value {
+    player::read_state(pid)
+}
+
+#[tauri::command]
+fn player_seek(pid: Option<u32>, position_ms: u64) -> Value {
+    player::seek(pid, position_ms)
+}
+
+#[tauri::command]
 fn export_settings_to_file(settings: Value) -> Value {
     let Some(path) = rfd::FileDialog::new()
         .set_title("Экспортировать настройки")
@@ -607,9 +662,13 @@ fn export_settings_to_file(settings: Value) -> Value {
     match serde_json::to_string_pretty(&settings) {
         Ok(serialized) => match fs::write(&path, serialized) {
             Ok(_) => json!({"success": true, "message": "Настройки успешно экспортированы"}),
-            Err(err) => json!({"success": false, "message": format!("Не удалось экспортировать настройки: {err}")}),
+            Err(err) => {
+                json!({"success": false, "message": format!("Не удалось экспортировать настройки: {err}")})
+            }
         },
-        Err(err) => json!({"success": false, "message": format!("Не удалось сериализовать настройки: {err}")}),
+        Err(err) => {
+            json!({"success": false, "message": format!("Не удалось сериализовать настройки: {err}")})
+        }
     }
 }
 
@@ -658,7 +717,10 @@ async fn torrserver_start(
 }
 
 #[tauri::command]
-async fn torrserver_stop(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<Value, String> {
+async fn torrserver_stop(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<Value, String> {
     let torr = state.torrserver.clone();
 
     match tauri::async_runtime::spawn_blocking(move || {
@@ -694,7 +756,10 @@ async fn torrserver_restart(
 }
 
 #[tauri::command]
-async fn torrserver_status(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<Value, String> {
+async fn torrserver_status(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<Value, String> {
     let store = state.store.clone();
     let torr = state.torrserver.clone();
 
@@ -746,7 +811,10 @@ async fn torrserver_check_update(state: tauri::State<'_, AppState>) -> Result<Va
 }
 
 #[tauri::command]
-async fn torrserver_update(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<Value, String> {
+async fn torrserver_update(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<Value, String> {
     let store = state.store.clone();
     let torr = state.torrserver.clone();
 
@@ -801,7 +869,6 @@ async fn torrserver_is_installed(
     }
 }
 
-
 fn inject_plugin(window: &tauri::Webview) {
     let plugin_code = match serde_json::to_string(PLUGIN_JS) {
         Ok(v) => v,
@@ -831,19 +898,26 @@ fn inject_plugin(window: &tauri::Webview) {
     let _ = window.eval(&script);
 }
 
+fn normalize_window_size(width: u64, height: u64) -> (u32, u32) {
+    (
+        width.clamp(MIN_WINDOW_WIDTH as u64, u32::MAX as u64) as u32,
+        height.clamp(MIN_WINDOW_HEIGHT as u64, u32::MAX as u64) as u32,
+    )
+}
+
 fn save_window_state(window: &tauri::WebviewWindow, state: &tauri::State<'_, AppState>) {
     let position = window.outer_position();
     let size = window.outer_size();
-
     if let (Ok(pos), Ok(sz)) = (position, size) {
+        let (width, height) = normalize_window_size(sz.width as u64, sz.height as u64);
         let mut store = state.store.lock().expect("store poisoned");
         let _ = store.set(
             "windowState".into(),
             json!({
                 "x": pos.x,
                 "y": pos.y,
-                "width": sz.width,
-                "height": sz.height
+                "width": width,
+                "height": height
             }),
         );
     }
@@ -863,11 +937,12 @@ fn apply_initial_window_state(window: &tauri::WebviewWindow, state: &tauri::Stat
         let h = ws.get("height").and_then(|v| v.as_u64());
 
         if let (Some(x), Some(y), Some(w), Some(h)) = (x, y, w, h) {
-            let _ = window.set_position(tauri::Position::Physical(
-                tauri::PhysicalPosition::new(x as i32, y as i32),
-            ));
+            let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
+                x as i32, y as i32,
+            )));
+            let (width, height) = normalize_window_size(w, h);
             let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(
-                w as u32, h as u32,
+                width, height,
             )));
         }
     }
@@ -880,10 +955,7 @@ fn initialize_prisma_defaults(window: &tauri::Webview, state: &tauri::State<'_, 
 
     let ts_port = {
         let guard = state.store.lock().expect("store poisoned");
-        guard
-            .get("tsPort")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(8090)
+        guard.get("tsPort").and_then(|v| v.as_u64()).unwrap_or(8090)
     };
 
     let defaults = json!({
@@ -905,6 +977,15 @@ fn initialize_prisma_defaults(window: &tauri::Webview, state: &tauri::State<'_, 
         Ok(v) => v,
         Err(_) => "null".to_string(),
     };
+    let pot_player_path = player::detect(None)
+        .get("preferred")
+        .and_then(|value| value.get("path"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let pot_player_path_js = match serde_json::to_string(&pot_player_path) {
+        Ok(v) => v,
+        Err(_) => "null".to_string(),
+    };
 
     let script = format!(
         r#"(function() {{
@@ -915,12 +996,20 @@ fn initialize_prisma_defaults(window: &tauri::Webview, state: &tauri::State<'_, 
     }});
 
     const vlcPath = {vlc_path_js};
+    const potPlayerPath = {pot_player_path_js};
     const existingPath = localStorage.getItem("player_nw_path");
     const playerTorrent = localStorage.getItem("player_torrent");
 
-    if (vlcPath && (!existingPath || !existingPath.length) && playerTorrent !== "inner") {{
-      localStorage.setItem("player_nw_path", vlcPath);
-      localStorage.setItem("player_torrent", "other");
+    if ((!existingPath || !existingPath.length) && playerTorrent !== "inner") {{
+      const preferredPath = potPlayerPath || vlcPath;
+      if (preferredPath) {{
+        localStorage.setItem("player_nw_path", preferredPath);
+        localStorage.setItem(
+          "player_torrent",
+          potPlayerPath ? "potplayer" : "other",
+        );
+        localStorage.setItem("player", potPlayerPath ? "potplayer" : "other");
+      }}
     }}
   }} catch (e) {{
     console.warn("Prisma defaults init failed", e);
@@ -964,7 +1053,6 @@ pub fn run() {
 
             apply_initial_window_state(&window, &state);
 
-
             if let Some(Value::String(url)) = get_store_value(&state, "prismaUrl") {
                 let sanitized = sanitize_prisma_url(&url);
 
@@ -1004,14 +1092,20 @@ pub fn run() {
             initialize_prisma_defaults(window, &state);
 
             let should_autostart = {
-                let mut done = state.autostart_done.lock().expect("autostart_done poisoned");
+                let mut done = state
+                    .autostart_done
+                    .lock()
+                    .expect("autostart_done poisoned");
                 if *done {
                     false
                 } else {
                     let enabled = get_store_value(&state, "tsAutoStart")
                         .map(|v| match v {
                             Value::Bool(b) => b,
-                            Value::String(s) => matches!(s.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"),
+                            Value::String(s) => matches!(
+                                s.trim().to_ascii_lowercase().as_str(),
+                                "1" | "true" | "yes" | "on"
+                            ),
                             Value::Number(n) => n.as_i64().unwrap_or(0) != 0,
                             _ => false,
                         })
@@ -1033,7 +1127,10 @@ pub fn run() {
                 tauri::async_runtime::spawn_blocking(move || {
                     let mut torr = torr_state.lock().expect("torrserver poisoned");
                     let result = torr.start(&app_handle, &store_state, Vec::new());
-                    let success = result.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let success = result
+                        .get("success")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
                     if !success {
                         eprintln!("TorrServer autostart failed: {}", result);
                     }
@@ -1061,6 +1158,12 @@ pub fn run() {
             open_folder,
             open_external_url,
             find_player,
+            player_detect,
+            player_choose_path,
+            player_validate,
+            player_start,
+            player_read_state,
+            player_seek,
             export_settings_to_file,
             import_settings_from_file,
             torrserver_start,
@@ -1075,4 +1178,31 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod window_state_tests {
+    use super::{normalize_window_size, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH};
+
+    #[test]
+    fn repairs_regression_size_that_made_the_window_invisible() {
+        assert_eq!(
+            normalize_window_size(176, 67),
+            (MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
+        );
+    }
+
+    #[test]
+    fn preserves_valid_saved_size() {
+        assert_eq!(normalize_window_size(1280, 720), (1280, 720));
+    }
+
+    #[test]
+    fn clamps_dimensions_independently_and_prevents_overflow() {
+        assert_eq!(normalize_window_size(640, 900), (MIN_WINDOW_WIDTH, 900));
+        assert_eq!(
+            normalize_window_size(u64::MAX, 1),
+            (u32::MAX, MIN_WINDOW_HEIGHT)
+        );
+    }
 }
