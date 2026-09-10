@@ -7,7 +7,9 @@ Prisma Desktop на **Tauri v2 + Rust**.
 ## Возможности
 - Смена зеркала Prisma (`http://prisma.ws` по умолчанию)
 - Экран выбора зеркала при первом запуске и при недоступности сохранённого адреса
-- Пункт меню «Сменить зеркало…» (⌘⇧M / Ctrl+Shift+M) открывает модаль смены адреса
+- История зеркал: последние рабочие адреса предлагаются в один клик, при старте перебираются автоматически
+- macOS: пункт меню «Сменить зеркало…» (⌘⇧M) открывает модаль смены адреса
+- Windows/Linux: адрес меняется на стартовом экране и в настройках Prisma (меню окна нет, чтобы не занимать место)
 - Desktop bridge/inject для клиентского кода
 - Встроенный TorrServer: установка, запуск, остановка, статус, обновление, удаление
 - Запуск внешних плееров
@@ -30,6 +32,15 @@ Prisma Desktop на **Tauri v2 + Rust**.
 - `src-tauri/macos-info.plist` — ATS настройки для macOS
 - `.github/workflows/main.yml` — сборка артефактов (all platforms)
 - `.github/workflows/updater.yml` — релиз/апдейтер артефакты
+
+## Версия
+Единственный источник — `version` в `package.json`. `tauri.conf.json` читает её оттуда
+(`"version": "../package.json"`), `Cargo.toml` и `Cargo.lock` синхронизирует скрипт:
+
+```bash
+npm run sync:version     # вручную
+npm version patch        # бампит package.json и синхронизирует сам
+```
 
 ## Требования
 - Node.js 20+
@@ -98,4 +109,3 @@ npm run tauri -- build --target x86_64-pc-windows-msvc
 
 ### Remote URLs / permissions
 - `src-tauri/capabilities/default.json`
-

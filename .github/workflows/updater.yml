@@ -70,19 +70,23 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Ключ апдейтера: без него не будет .sig и latest.json, и автообновление
+          # у пользователей перестаёт находить релиз.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Apple-подпись здесь не настроена (сертификат в keychain не импортируется),
+          # поэтому APPLE_SIGNING_IDENTITY намеренно не передаётся: без него
+          # Tauri просто пропускает code signing, не роняя сборку.
         with:
           tagName: ${{ github.ref_name }}
           releaseName: Prisma Desktop ${{ github.ref_name }}
           releaseBody: Automated release build for Prisma Desktop.
           releaseDraft: false
           prerelease: false
-          args: --target ${{ matrix.target }} --no-sign --config '{"bundle":{"createUpdaterArtifacts":false}}'
+          # Без --no-sign: вопреки описанию в справке CLI, этот флаг отключает
+          # и подпись апдейтера тоже ("Updater signing is skipped due to --no-sign flag"),
+          # а значит .sig не создаётся и latest.json собрать не из чего.
+          args: --target ${{ matrix.target }}
 
       - name: Create Windows portable zip
         if: matrix.target == 'x86_64-pc-windows-msvc'
