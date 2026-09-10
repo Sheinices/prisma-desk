@@ -19,6 +19,7 @@ const BRIDGE_JS: &str = include_str!("../module/bridge.js");
 const PLUGIN_JS: &str = include_str!("../module/client-inject.js");
 const MIRROR_MODAL_JS: &str = include_str!("../module/mirror-modal.js");
 const DEFAULT_PRISMA_URL: &str = "http://prisma.ws";
+#[cfg(target_os = "macos")]
 const MIRROR_MENU_ID: &str = "prisma-mirror";
 const MIN_WINDOW_WIDTH: u32 = 800;
 const MIN_WINDOW_HEIGHT: u32 = 600;
@@ -1131,7 +1132,7 @@ fn initialize_prisma_defaults(window: &tauri::Webview, state: &tauri::State<'_, 
     let _ = window.eval(&script);
 }
 
-fn build_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
+fn build_app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     use tauri::menu::{Menu, MenuItem, Submenu};
 
     let mirror_item = MenuItem::with_id(
@@ -1142,31 +1143,20 @@ fn build_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
         Some("CmdOrCtrl+Shift+M"),
     )?;
 
-    // macOS: добавляем пункт в системную строку меню рядом со стандартными.
-    #[cfg(target_os = "macos")]
-    {
-        let menu = Menu::default(app)?;
-        menu.append(&Submenu::with_items(app, "Зеркало", true, &[&mirror_item])?)?;
-        app.set_menu(menu)?;
-    }
+    let menu = Menu::default(app)?;
+    menu.append(&Submenu::with_items(app, "Зеркало", true, &[&mirror_item])?)?;
 
-    // Windows/Linux: меню окна под заголовком, нативные кнопки окна остаются на месте.
-    #[cfg(not(target_os = "macos"))]
-    {
-        let menu = Menu::with_items(
-            app,
-            &[&Submenu::with_items(app, "Prisma", true, &[&mirror_item])?],
-        )?;
-
-        app.set_menu(menu)?;
-    }
-
-    Ok(())
+    Ok(menu)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+
+    #[cfg(target_os = "macos")]
+    let builder = builder.menu(build_app_menu);
+
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
@@ -1176,11 +1166,14 @@ pub fn run() {
             }
         }))
         .on_menu_event(|app, event| {
+            #[cfg(target_os = "macos")]
             if event.id() == MIRROR_MENU_ID {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.eval("window.__prismaMirror && window.__prismaMirror.open()");
                 }
             }
+
+            let _ = (app, event);
         })
         .setup(|app| {
             let path = store_path(&app.handle())?;
@@ -1203,7 +1196,6 @@ pub fn run() {
             let state = app.state::<AppState>();
 
             apply_initial_window_state(&window, &state);
-            build_app_menu(&app.handle())?;
 
             // Стартовая страница: локальный экран выбора зеркала (web/index.html).
             // Он сам проверяет сохранённый адрес и переходит на него, если тот доступен.
