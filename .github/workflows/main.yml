@@ -15,6 +15,12 @@ env:
   TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
   TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
+# ВАЖНО: здесь собираются только платформенные артефакты для скачивания вручную,
+# поэтому апдейтер отключён (--no-sign + createUpdaterArtifacts:false) и ключ не нужен.
+# В updater.yml так делать НЕЛЬЗЯ: там без подписи не появятся latest.json и .sig,
+# и автообновление у пользователей перестанет работать. Подробности в README,
+# раздел Автообновление.
+
 jobs:
   macos-arm64:
     runs-on: macos-14

@@ -64,6 +64,9 @@ npm run tauri       # tauri CLI
 
 ## Локальные сборки
 
+> Локальная сборка требует ключа апдейтера или флага `--no-sign` — см.
+> [«Локальная сборка: не выключайте апдейтер в репозитории»](#-локальная-сборка-не-выключайте-апдейтер-в-репозитории).
+
 ### macOS ARM64
 ```bash
 npm run tauri -- build --target aarch64-apple-darwin --bundles app,dmg
@@ -95,6 +98,45 @@ npm run tauri -- build --target x86_64-pc-windows-msvc
 - Требует signing keys (`TAURI_SIGNING_PRIVATE_KEY`)
 - Для macOS релизов требуется Apple signing/notarization secrets
 - На Windows **portable**-сборке автообновление отключено (показывается сообщение о ручном обновлении через GitHub Releases)
+
+### ⚠️ Локальная сборка: не выключайте апдейтер в репозитории
+
+Локальный `npm run build` падает с ошибкой:
+
+```
+A public key has been found, but no private key.
+Make sure to set `TAURI_SIGNING_PRIVATE_KEY` environment variable.
+```
+
+Это нормально: в `tauri.conf.json` лежит публичный ключ апдейтера, а приватного на вашей
+машине нет. **Чинить это правкой репозитория нельзя.** Не делайте ничего из списка ниже
+и не коммитьте такие изменения:
+
+- не убирайте `plugins.updater` или `pubkey` из `src-tauri/tauri.conf.json`;
+- не ставьте `"createUpdaterArtifacts": false` в конфиге;
+- не добавляйте `--no-sign` и `--config '{"bundle":{"createUpdaterArtifacts":false}}'`
+  в `.github/workflows/updater.yml`.
+
+Любое из этих действий убирает из релиза `latest.json` и файлы `.sig`, и автообновление
+у всех пользователей молча перестаёт работать: приложение просто не находит новую версию.
+Именно так автообновление сломалось между v1.2.1 и v1.2.2.
+
+Правильные способы собрать локально:
+
+```bash
+# 1) Разово отключить апдейтер только для своей сборки — флагом, без правки файлов
+npm run tauri -- build --no-sign
+
+# 2) Или подписывать своим тестовым ключом
+npm run tauri -- signer generate -w ~/.tauri/prisma-test.key -p ""
+TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/prisma-test.key)" \
+TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" \
+  npm run tauri -- build
+```
+
+Отдельно про `--no-sign`: в справке CLI написано «skip code signing», но по факту он
+отключает **и подпись апдейтера** (`Updater signing is skipped due to --no-sign flag`).
+Для локальной сборки это удобно, в релизном workflow — недопустимо.
 
 ## Артефакты
 - macOS: `.app`, `.dmg`
