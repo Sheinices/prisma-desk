@@ -35,6 +35,16 @@
       -webkit-user-select: text; user-select: text;
     }
     .prisma-mirror-card input:focus { border-color: #4f7cff; }
+    .prisma-mirror-card__history {
+      display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin-top: 10px;
+    }
+    .prisma-mirror-card__chip {
+      max-width: 100%; padding: 5px 10px; border: 0; border-radius: 12px;
+      background: rgba(255, 255, 255, 0.08); color: rgba(231, 233, 238, 0.8);
+      font-size: 11px; cursor: pointer;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .prisma-mirror-card__chip:hover { background: rgba(255, 255, 255, 0.16); color: #fff; }
     .prisma-mirror-card__status { min-height: 18px; margin: 10px 0 0; font-size: 12px; opacity: 0.8; }
     .prisma-mirror-card__status--ok { color: #4ad07f; opacity: 1; }
     .prisma-mirror-card__status--err { color: #ff6b6b; opacity: 1; }
@@ -59,6 +69,7 @@
         Укажите адрес зеркала Prisma. Он сохранится и будет открываться при запуске.
       </p>
       <input type="text" spellcheck="false" autocomplete="off" placeholder="http://prisma.ws" />
+      <div class="prisma-mirror-card__history"></div>
       <p class="prisma-mirror-card__status"></p>
       <div class="prisma-mirror-card__row">
         <button class="prisma-btn--primary" data-act="apply">Проверить и перейти</button>
@@ -93,8 +104,28 @@
   function wire(doc, root, state) {
     const input = root.querySelector("input");
     const status = root.querySelector(".prisma-mirror-card__status");
-    const buttons = root.querySelectorAll("button");
+    const historyBox = root.querySelector(".prisma-mirror-card__history");
+    const history = (state && Array.isArray(state.history) ? state.history : []).slice();
     input.value = (state && state.url) || "";
+
+    // Ранее рабочие зеркала — в один клик.
+    function renderHistory() {
+      const others = history.filter((item) => item !== input.value.trim());
+      historyBox.innerHTML = "";
+
+      others.forEach((item) => {
+        const chip = doc.createElement("button");
+        chip.type = "button";
+        chip.className = "prisma-mirror-card__chip";
+        chip.dataset.act = "pick";
+        chip.dataset.url = item;
+        chip.textContent = item;
+        historyBox.appendChild(chip);
+      });
+    }
+
+    renderHistory();
+    const buttons = root.querySelectorAll("button");
 
     function setStatus(text, kind) {
       status.textContent = text;
@@ -150,9 +181,15 @@
 
       if (button.dataset.act === "cancel") {
         close();
+      } else if (button.dataset.act === "pick") {
+        input.value = button.dataset.url;
+        setStatus("");
+        renderHistory();
+        input.focus();
       } else if (button.dataset.act === "reset") {
         input.value = (state && state.default) || "http://prisma.ws";
         setStatus("");
+        renderHistory();
         input.focus();
       } else if (button.dataset.act === "apply") {
         apply();

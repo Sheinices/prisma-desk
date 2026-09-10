@@ -276,6 +276,16 @@
         })),
     },
 
+    proxy: {
+      status: () =>
+        invoke("proxy_status").catch((e) => ({
+          running: false,
+          message: String(e),
+        })),
+      restart: () =>
+        invoke("proxy_restart").catch((e) => ({ success: false, message: String(e) })),
+    },
+
     folder: {
       open: (path) => invoke("open_folder", { path }),
     },

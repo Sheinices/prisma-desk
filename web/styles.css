@@ -88,6 +88,33 @@ body {
   border-color: #4f7cff;
 }
 
+.setup__history {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.chip {
+  max-width: 100%;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(231, 233, 238, 0.8);
+  font-size: 11px;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chip:hover {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+}
+
 .setup__status {
   min-height: 18px;
   margin: 10px 0 0;

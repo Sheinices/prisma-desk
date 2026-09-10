@@ -10,10 +10,33 @@ const resetButton = document.querySelector("#reset");
 const skipButton = document.querySelector("#skip");
 
 let defaultUrl = "http://prisma.ws";
+let history = [];
 
 function setStatus(text, kind) {
   status.textContent = text || "";
   status.className = "setup__status" + (kind ? ` setup__status--${kind}` : "");
+}
+
+function renderHistory() {
+  const box = document.querySelector("#history");
+  const others = history.filter((item) => item !== input.value.trim());
+
+  box.innerHTML = "";
+  box.hidden = others.length === 0;
+
+  others.forEach((item) => {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "chip";
+    chip.textContent = item;
+    chip.addEventListener("click", () => {
+      input.value = item;
+      setStatus("");
+      renderHistory();
+      input.focus();
+    });
+    box.appendChild(chip);
+  });
 }
 
 function showForm(url, message, kind) {
@@ -21,6 +44,7 @@ function showForm(url, message, kind) {
   form.hidden = false;
   input.value = url || defaultUrl;
   setStatus(message, kind);
+  renderHistory();
   input.focus();
   input.select();
 }
@@ -74,6 +98,7 @@ input.addEventListener("keydown", (event) => {
 resetButton.addEventListener("click", () => {
   input.value = defaultUrl;
   setStatus("");
+  renderHistory();
   input.focus();
 });
 
@@ -97,6 +122,7 @@ async function boot() {
   }
 
   defaultUrl = state.default || defaultUrl;
+  history = Array.isArray(state.history) ? state.history : [];
   const url = state.url || defaultUrl;
 
   if (!state.confirmed) {
@@ -104,24 +130,32 @@ async function boot() {
     return;
   }
 
-  splashText.textContent = `Проверяем ${url}…`;
+  // Сохранённый адрес, затем ранее рабочие зеркала — первое живое открываем сами.
+  const candidates = [url, ...history.filter((item) => item !== url)];
+  let lastMessage = "";
 
-  const result = await invoke("mirror_check", { url }).catch((error) => ({
-    ok: false,
-    message: String(error),
-  }));
+  for (const candidate of candidates) {
+    splashText.textContent = `Проверяем ${candidate}…`;
 
-  if (result.ok) {
+    const result = await invoke("mirror_check", { url: candidate }).catch((error) => ({
+      ok: false,
+      message: String(error),
+    }));
+
+    if (!result.ok) {
+      lastMessage = result.message || "Зеркало недоступно";
+      continue;
+    }
+
     try {
-      await apply(url);
+      await apply(candidate);
       return;
     } catch (error) {
-      showForm(url, String(error), "err");
-      return;
+      lastMessage = String(error);
     }
   }
 
-  showForm(url, `${result.message}. Укажите другое зеркало.`, "err");
+  showForm(url, `${lastMessage}. Укажите другое зеркало.`, "err");
 }
 
 boot();

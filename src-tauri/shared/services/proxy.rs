@@ -5,6 +5,10 @@ use std::time::Duration;
 
 use tiny_http::{Header, Method, Response, Server, StatusCode};
 
+/// Порт зафиксирован: адрес http://localhost:4000/vlc зашит в клиенте Prisma,
+/// поэтому подменять его на свободный нельзя — функция просто перестанет работать.
+pub const PROXY_PORT: u16 = 4000;
+
 #[derive(Debug)]
 pub struct ProxyServerManager {
     running: bool,
@@ -32,8 +36,9 @@ impl ProxyServerManager {
             return Ok(());
         }
 
-        let server = Server::http("127.0.0.1:4000")
-            .map_err(|e| format!("failed to start proxy on 127.0.0.1:4000: {e}"))?;
+        let server = Server::http(("127.0.0.1", PROXY_PORT)).map_err(|e| {
+            format!("не удалось занять порт {PROXY_PORT} для VLC-прокси: {e}")
+        })?;
 
         let (tx, rx) = mpsc::channel::<()>();
 
@@ -43,6 +48,10 @@ impl ProxyServerManager {
         self.worker = Some(worker);
         self.running = true;
         Ok(())
+    }
+
+    pub fn is_running(&self) -> bool {
+        self.running
     }
 
     pub fn stop(&mut self) {

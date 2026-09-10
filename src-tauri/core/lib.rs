@@ -356,6 +356,18 @@ fn navigate_window(window: &tauri::WebviewWindow, url: &str) -> Result<(), Strin
         .map_err(|e| format!("не удалось открыть адрес: {e}"))
 }
 
+fn mirror_history(state: &tauri::State<'_, AppState>) -> Vec<String> {
+    get_store_value(state, "mirrorHistory")
+        .and_then(|value| value.as_array().cloned())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 #[tauri::command]
 fn mirror_state(state: tauri::State<'_, AppState>) -> Value {
     let url = get_store_value(&state, "prismaUrl")
@@ -369,7 +381,8 @@ fn mirror_state(state: tauri::State<'_, AppState>) -> Value {
     json!({
         "url": sanitize_prisma_url(&url),
         "confirmed": confirmed,
-        "default": DEFAULT_PRISMA_URL
+        "default": DEFAULT_PRISMA_URL,
+        "history": mirror_history(&state)
     })
 }
 
@@ -430,15 +443,51 @@ fn mirror_apply(
 ) -> Result<Value, String> {
     let target = sanitize_prisma_url(&normalize_mirror_url(&url));
 
+    let history = store::push_mirror_history(
+        &mirror_history(&state),
+        &target,
+        store::MIRROR_HISTORY_LIMIT,
+    );
+
     {
         let mut store = state.store.lock().expect("store poisoned");
         store.set("prismaUrl".into(), Value::String(target.clone()))?;
         store.set("mirrorConfirmed".into(), Value::Bool(true))?;
+        store.set("mirrorHistory".into(), json!(history))?;
     }
 
     navigate_window(&window, &target)?;
 
     Ok(json!({ "success": true, "url": target }))
+}
+
+#[tauri::command]
+fn proxy_status(state: tauri::State<'_, AppState>) -> Value {
+    let running = state.proxy.lock().expect("proxy poisoned").is_running();
+    let message = state.proxy_error.lock().expect("proxy_error poisoned").clone();
+
+    json!({
+        "running": running,
+        "port": proxy::PROXY_PORT,
+        "message": message
+    })
+}
+
+#[tauri::command]
+fn proxy_restart(state: tauri::State<'_, AppState>) -> Value {
+    let result = {
+        let mut proxy = state.proxy.lock().expect("proxy poisoned");
+        proxy.stop();
+        proxy.start()
+    };
+
+    let mut error = state.proxy_error.lock().expect("proxy_error poisoned");
+    *error = result.as_ref().err().cloned();
+
+    match result {
+        Ok(()) => json!({ "success": true, "port": proxy::PROXY_PORT }),
+        Err(message) => json!({ "success": false, "port": proxy::PROXY_PORT, "message": message }),
+    }
 }
 
 #[tauri::command]
@@ -1010,6 +1059,40 @@ fn inject_plugin(window: &tauri::Webview) {
     let _ = window.eval(&script);
 }
 
+type Rect = (i32, i32, u32, u32);
+
+/// Доля площади окна, которая должна попадать на мониторы, чтобы позицию
+/// считать пригодной. Иначе окно откроется за пределами экранов и достать
+/// его можно будет только удалением store.json.
+const MIN_VISIBLE_FRACTION: f64 = 0.25;
+
+fn overlap_area(a: Rect, b: Rect) -> u64 {
+    let (ax, ay, aw, ah) = a;
+    let (bx, by, bw, bh) = b;
+
+    let left = ax.max(bx);
+    let top = ay.max(by);
+    let right = (ax as i64 + aw as i64).min(bx as i64 + bw as i64);
+    let bottom = (ay as i64 + ah as i64).min(by as i64 + bh as i64);
+
+    let width = (right - left as i64).max(0) as u64;
+    let height = (bottom - top as i64).max(0) as u64;
+
+    width * height
+}
+
+fn window_is_on_screen(window: Rect, monitors: &[Rect]) -> bool {
+    let area = window.2 as u64 * window.3 as u64;
+
+    if area == 0 || monitors.is_empty() {
+        return false;
+    }
+
+    let visible: u64 = monitors.iter().map(|m| overlap_area(window, *m)).sum();
+
+    visible as f64 >= area as f64 * MIN_VISIBLE_FRACTION
+}
+
 fn normalize_window_size(width: u64, height: u64) -> (u32, u32) {
     (
         width.clamp(MIN_WINDOW_WIDTH as u64, u32::MAX as u64) as u32,
@@ -1035,29 +1118,127 @@ fn save_window_state(window: &tauri::WebviewWindow, state: &tauri::State<'_, App
     }
 }
 
-fn apply_initial_window_state(window: &tauri::WebviewWindow, state: &tauri::State<'_, AppState>) {
-    let store = state.store.lock().expect("store poisoned");
+fn apply_initial_window_state(
+    app: &tauri::AppHandle,
+    window: &tauri::WebviewWindow,
+    state: &tauri::State<'_, AppState>,
+) {
+    // Читаем настройки и сразу отпускаем мьютекс: пока setup держит стор,
+    // команды из webview ждут его же.
+    let (fullscreen, saved_rect) = {
+        let store = state.store.lock().expect("store poisoned");
 
-    if let Some(Value::Bool(fullscreen)) = store.get("fullscreen") {
+        let fullscreen = match store.get("fullscreen") {
+            Some(Value::Bool(value)) => Some(value),
+            _ => None,
+        };
+
+        let saved_rect = match store.get("windowState") {
+            Some(Value::Object(ws)) => {
+                let x = ws.get("x").and_then(|v| v.as_i64());
+                let y = ws.get("y").and_then(|v| v.as_i64());
+                let w = ws.get("width").and_then(|v| v.as_u64());
+                let h = ws.get("height").and_then(|v| v.as_u64());
+
+                match (x, y, w, h) {
+                    (Some(x), Some(y), Some(w), Some(h)) => Some((x, y, w, h)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+
+        (fullscreen, saved_rect)
+    };
+
+    if let Some(fullscreen) = fullscreen {
         let _ = window.set_fullscreen(fullscreen);
     }
 
-    if let Some(Value::Object(ws)) = store.get("windowState") {
-        let x = ws.get("x").and_then(|v| v.as_i64());
-        let y = ws.get("y").and_then(|v| v.as_i64());
-        let w = ws.get("width").and_then(|v| v.as_u64());
-        let h = ws.get("height").and_then(|v| v.as_u64());
+    let Some((x, y, w, h)) = saved_rect else {
+        return;
+    };
 
-        if let (Some(x), Some(y), Some(w), Some(h)) = (x, y, w, h) {
-            let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
-                x as i32, y as i32,
-            )));
-            let (width, height) = normalize_window_size(w, h);
-            let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(
-                width, height,
-            )));
-        }
+    let (width, height) = normalize_window_size(w, h);
+    let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(width, height)));
+
+    // available_monitors() сам просит главный поток и ждёт ответа, поэтому
+    // вызывать его из setup (и вообще из главного потока) нельзя — будет дедлок.
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(window) = handle.get_webview_window("main") else {
+            return;
+        };
+
+        restore_window_position(&window, (x as i32, y as i32, width, height));
+    });
+}
+
+fn restore_window_position(window: &tauri::WebviewWindow, rect: Rect) {
+    let monitors: Vec<Rect> = window
+        .available_monitors()
+        .unwrap_or_default()
+        .iter()
+        .map(|monitor| {
+            let position = monitor.position();
+            let size = monitor.size();
+            (position.x, position.y, size.width, size.height)
+        })
+        .collect();
+
+    if window_is_on_screen(rect, &monitors) {
+        let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
+            rect.0, rect.1,
+        )));
+    } else {
+        // Монитор отключили или сменилось разрешение — возвращаем окно на экран.
+        let _ = window.center();
     }
+}
+
+/// Если порт VLC-прокси занят, пользователь должен об этом узнать:
+/// иначе запуск во внешнем плеере просто молча не работает.
+fn warn_about_proxy(window: &tauri::Webview, state: &tauri::State<'_, AppState>) {
+    let message = {
+        let mut warned = state.proxy_warned.lock().expect("proxy_warned poisoned");
+        if *warned {
+            return;
+        }
+
+        let Some(message) = state.proxy_error.lock().expect("proxy_error poisoned").clone() else {
+            return;
+        };
+
+        *warned = true;
+        message
+    };
+
+    let text = format!(
+        "{message}. Закройте программу, занявшую порт {}, и перезапустите прокси в настройках.",
+        proxy::PROXY_PORT
+    );
+
+    let Ok(text_js) = serde_json::to_string(&text) else {
+        return;
+    };
+
+    let script = format!(
+        r#"(function() {{
+  const text = {text_js};
+  let attempts = 0;
+  const show = () => {{
+    if (window.Prisma && Prisma.Noty && Prisma.Noty.show) {{
+      Prisma.Noty.show(text);
+      return;
+    }}
+    if (attempts++ < 50) setTimeout(show, 200);
+    else console.warn(text);
+  }};
+  show();
+}})();"#
+    );
+
+    let _ = window.eval(&script);
 }
 
 fn initialize_prisma_defaults(window: &tauri::Webview, state: &tauri::State<'_, AppState>) {
@@ -1180,13 +1361,19 @@ pub fn run() {
             let store = store::AppStore::load(path);
 
             let mut proxy = proxy::ProxyServerManager::new();
-            let _ = proxy.start();
+            let proxy_error = proxy.start().err();
+
+            if let Some(message) = &proxy_error {
+                eprintln!("VLC proxy: {message}");
+            }
 
             app.manage(AppState {
                 store: Arc::new(Mutex::new(store)),
                 torrserver: Arc::new(Mutex::new(torrserver::TorrServerManager::new())),
                 proxy: Arc::new(Mutex::new(proxy)),
                 autostart_done: Arc::new(Mutex::new(false)),
+                proxy_error: Arc::new(Mutex::new(proxy_error)),
+                proxy_warned: Arc::new(Mutex::new(false)),
             });
 
             let window = app
@@ -1195,7 +1382,7 @@ pub fn run() {
 
             let state = app.state::<AppState>();
 
-            apply_initial_window_state(&window, &state);
+            apply_initial_window_state(&app.handle().clone(), &window, &state);
 
             // Стартовая страница: локальный экран выбора зеркала (web/index.html).
             // Он сам проверяет сохранённый адрес и переходит на него, если тот доступен.
@@ -1237,6 +1424,7 @@ pub fn run() {
 
             let state = window.app_handle().state::<AppState>();
             initialize_prisma_defaults(window, &state);
+            warn_about_proxy(window, &state);
 
             let should_autostart = {
                 let mut done = state
@@ -1302,6 +1490,8 @@ pub fn run() {
             mirror_state,
             mirror_check,
             mirror_apply,
+            proxy_status,
+            proxy_restart,
             fs_exists_sync,
             child_process_spawn,
             open_folder,
@@ -1330,8 +1520,69 @@ pub fn run() {
 }
 
 #[cfg(test)]
+mod mirror_tests {
+    use super::{is_local_page, normalize_mirror_url, sanitize_prisma_url, DEFAULT_PRISMA_URL};
+
+    #[test]
+    fn normalizes_user_input_into_url() {
+        assert_eq!(normalize_mirror_url("prisma.ws"), "http://prisma.ws");
+        assert_eq!(normalize_mirror_url("  prisma.ws/  "), "http://prisma.ws");
+        assert_eq!(normalize_mirror_url("https://mirror.tld/"), "https://mirror.tld");
+        assert_eq!(normalize_mirror_url("   "), DEFAULT_PRISMA_URL);
+    }
+
+    #[test]
+    fn sanitize_falls_back_to_default_on_empty_input() {
+        assert_eq!(sanitize_prisma_url("   "), DEFAULT_PRISMA_URL);
+        assert_eq!(sanitize_prisma_url(" http://mirror.tld "), "http://mirror.tld");
+    }
+
+    #[test]
+    fn local_pages_are_told_apart_from_mirrors() {
+        let local = ["tauri://localhost", "http://tauri.localhost/index.html"];
+        for url in local {
+            assert!(
+                is_local_page(&tauri::Url::parse(url).unwrap()),
+                "{url} должен считаться локальной страницей"
+            );
+        }
+
+        let remote = ["http://prisma.ws", "https://mirror.tld/page"];
+        for url in remote {
+            assert!(
+                !is_local_page(&tauri::Url::parse(url).unwrap()),
+                "{url} не должен считаться локальной страницей"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod window_state_tests {
-    use super::{normalize_window_size, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH};
+    use super::{normalize_window_size, window_is_on_screen, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH};
+
+    const LAPTOP: (i32, i32, u32, u32) = (0, 0, 1920, 1080);
+    const SECOND_MONITOR: (i32, i32, u32, u32) = (1920, 0, 1920, 1080);
+
+    #[test]
+    fn keeps_position_that_is_mostly_visible() {
+        assert!(window_is_on_screen((100, 100, 1000, 700), &[LAPTOP]));
+    }
+
+    #[test]
+    fn rejects_position_on_a_disconnected_monitor() {
+        // Окно осталось на втором мониторе, которого больше нет.
+        assert!(!window_is_on_screen((2100, 200, 1000, 700), &[LAPTOP]));
+        assert!(window_is_on_screen((2100, 200, 1000, 700), &[LAPTOP, SECOND_MONITOR]));
+    }
+
+    #[test]
+    fn rejects_window_hanging_off_the_edge() {
+        assert!(!window_is_on_screen((1850, 100, 1000, 700), &[LAPTOP]));
+        assert!(!window_is_on_screen((100, 100, 0, 0), &[LAPTOP]));
+        assert!(!window_is_on_screen((100, 100, 1000, 700), &[]));
+    }
+
 
     #[test]
     fn repairs_regression_size_that_made_the_window_invisible() {

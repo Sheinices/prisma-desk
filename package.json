@@ -7,7 +7,9 @@
     "tauri": "tauri",
     "dev": "tauri dev",
     "build": "tauri build",
-    "check:rust": "cd src-tauri && cargo check"
+    "check:rust": "cd src-tauri && cargo check",
+    "sync:version": "node scripts/sync-version.mjs",
+    "version": "node scripts/sync-version.mjs && git add src-tauri/Cargo.toml src-tauri/Cargo.lock"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"
