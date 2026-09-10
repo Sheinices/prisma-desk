@@ -1313,6 +1313,11 @@ fn initialize_prisma_defaults(window: &tauri::Webview, state: &tauri::State<'_, 
     let _ = window.eval(&script);
 }
 
+// Меню только для macOS: там оно общесистемное и места в окне не занимает.
+// На Windows/Linux полоса меню съедала бы верх окна, поэтому зеркало там
+// меняется на стартовом экране (он же появляется, если зеркало недоступно)
+// и в настройках Prisma.
+#[cfg(target_os = "macos")]
 fn build_app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     use tauri::menu::{Menu, MenuItem, Submenu};
 
