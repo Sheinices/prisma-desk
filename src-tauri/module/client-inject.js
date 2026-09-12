@@ -492,7 +492,7 @@
         uk: "Вибрати VLC, PotPlayer або інший програвач",
       },
       app_settings_player_mode: {
-        ru: "Плеер",
+        ru: "Тип плеера",
         en: "Player: video and torrents",
         uk: "Програвач: відео та торенти",
       },
@@ -590,52 +590,54 @@
 
     const settingsManager = new SettingsManager("app_settings");
 
-    Prisma.SettingsApi.addParam({
-      component: "player",
-      param: {
-        name: "app_player_mode",
-        type: "select",
-        values: {
-          inner: Prisma.Lang.translate("app_settings_player_mode_inner"),
-          external: Prisma.Lang.translate("app_settings_player_mode_external"),
+    if (isWindowsPlatform()) {
+      Prisma.SettingsApi.addParam({
+        component: "player",
+        param: {
+          name: "app_player_mode",
+          type: "select",
+          values: {
+            inner: Prisma.Lang.translate("app_settings_player_mode_inner"),
+            external: Prisma.Lang.translate("app_settings_player_mode_external"),
+          },
+          default: currentPlayerMode(),
         },
-        default: currentPlayerMode(),
-      },
-      field: {
-        name: Prisma.Lang.translate("app_settings_player_mode"),
-        description: Prisma.Lang.translate("app_settings_player_mode_description"),
-      },
-      onChange: async (value) => {
-        const result = applyPlayerMode(value === "inner" ? "inner" : "external");
+        field: {
+          name: Prisma.Lang.translate("app_settings_player_mode"),
+          description: Prisma.Lang.translate("app_settings_player_mode_description"),
+        },
+        onChange: async (value) => {
+          const result = applyPlayerMode(value === "inner" ? "inner" : "external");
 
-        if (result.needsSetup) {
-          Prisma.Loading.start(
-            () => {},
-            `${Prisma.Lang.translate("app_settings_player_find")}...`,
-          );
-          await configureExternalPlayer();
-          Prisma.Loading.stop();
-        }
-
-        Prisma.Settings.update();
-      },
-      onRender: function (element) {
-        var attempts = 0;
-
-        var place = function () {
-          var node = element && element.nodeType ? element : element && element[0];
-          var how = placePlayerModeSetting(node);
-
-          // Раздел настроек мог ещё не дорисоваться — тогда заголовок и строка
-          // выбора плеера не найдены, и пункт остаётся в конце списка.
-          if (how !== "after-title" && how !== "before-native" && attempts++ < 5) {
-            setTimeout(place, 100);
+          if (result.needsSetup) {
+            Prisma.Loading.start(
+              () => {},
+              `${Prisma.Lang.translate("app_settings_player_find")}...`,
+            );
+            await configureExternalPlayer();
+            Prisma.Loading.stop();
           }
-        };
 
-        setTimeout(place, 0);
-      },
-    });
+          Prisma.Settings.update();
+        },
+        onRender: function (element) {
+          var attempts = 0;
+
+          var place = function () {
+            var node = element && element.nodeType ? element : element && element[0];
+            var how = placePlayerModeSetting(node);
+
+            // Раздел настроек мог ещё не дорисоваться — тогда заголовок и строка
+            // выбора плеера не найдены, и пункт остаётся в конце списка.
+            if (how !== "after-title" && how !== "before-native" && attempts++ < 5) {
+              setTimeout(place, 100);
+            }
+          };
+
+          setTimeout(place, 0);
+        },
+      });
+    }
 
     Prisma.SettingsApi.addParam({
       component: "player",
@@ -2267,6 +2269,10 @@
   }
 
   // Запоминаем, какой внешний плеер был выбран, чтобы вернуть его при переключении назад.
+  function isWindowsPlatform() {
+    return /windows/i.test((typeof navigator !== "undefined" && navigator.userAgent) || "");
+  }
+
   const EXTERNAL_PLAYER_ID_KEY = "app_external_player_id";
   // IPTV намеренно не трогаем: он настраивается отдельной строкой Prisma.
   const PLAYER_KEYS = ["player_torrent", "player"];

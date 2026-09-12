@@ -227,6 +227,33 @@ function placementCase({ names, withBody }) {
   return { how, order: container.children.map((child) => child.dataName) };
 }
 
+// --- платформенный гейт -------------------------------------------------------
+
+function runPlatform(userAgent) {
+  const context = { console, String, navigator: { userAgent } };
+  vm.createContext(context);
+  vm.runInContext(code, context);
+  return context.isWindowsPlatform();
+}
+
+const platformCases = [
+  {
+    name: "на Windows пункт добавляется",
+    run: () => runPlatform("Mozilla/5.0 (Windows NT 10.0; Win64; x64)"),
+    check: (result) => result === true,
+  },
+  {
+    name: "на macOS пункт не добавляется",
+    run: () => runPlatform("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"),
+    check: (result) => result === false,
+  },
+  {
+    name: "на Linux пункт не добавляется",
+    run: () => runPlatform("Mozilla/5.0 (X11; Linux x86_64)"),
+    check: (result) => result === false,
+  },
+];
+
 const placementCases = [
   {
     name: "встаём сразу после заголовка «Чем смотреть»",
@@ -325,7 +352,7 @@ for (const testCase of cases) {
   console.log(`${ok ? "ok  " : "FAIL"}  ${testCase.name}: ${target}${ok ? "" : ` (ожидалось ${testCase.expect})`}`);
 }
 
-for (const testCase of [...modeCases, ...placementCases]) {
+for (const testCase of [...modeCases, ...placementCases, ...platformCases]) {
   let ok = false;
   let detail = "";
   try {
@@ -339,6 +366,6 @@ for (const testCase of [...modeCases, ...placementCases]) {
   console.log(`${ok ? "ok  " : "FAIL"}  ${testCase.name}${ok ? "" : ` -> ${detail}`}`);
 }
 
-const total = cases.length + modeCases.length + placementCases.length;
+const total = cases.length + modeCases.length + placementCases.length + platformCases.length;
 console.log(failed ? `\n${failed} из ${total} не прошли` : `\nвсе ${total} проверки пройдены`);
 process.exit(failed ? 1 : 0);
