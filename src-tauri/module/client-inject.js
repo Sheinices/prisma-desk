@@ -492,14 +492,14 @@
         uk: "Вибрати VLC, PotPlayer або інший програвач",
       },
       app_settings_player_mode: {
-        ru: "Проигрыватель",
-        en: "Player",
-        uk: "Програвач",
+        ru: "Проигрыватель: видео и торренты",
+        en: "Player: video and torrents",
+        uk: "Програвач: відео та торенти",
       },
       app_settings_player_mode_description: {
-        ru: "Встроенный плеер Prisma или внешний",
-        en: "Built-in Prisma player or an external one",
-        uk: "Вбудований програвач Prisma або зовнішній",
+        ru: "Задаёт оба сразу. IPTV и остальное — в настройках Prisma ниже",
+        en: "Sets both at once. IPTV and the rest are in Prisma's options below",
+        uk: "Задає обидва одразу. IPTV та інше — у налаштуваннях Prisma нижче",
       },
       app_settings_player_mode_inner: {
         ru: "Встроенный",
@@ -2258,7 +2258,8 @@
 
   // Запоминаем, какой внешний плеер был выбран, чтобы вернуть его при переключении назад.
   const EXTERNAL_PLAYER_ID_KEY = "app_external_player_id";
-  const PLAYER_KEYS = ["player_torrent", "player_iptv", "player"];
+  // IPTV намеренно не трогаем: он настраивается отдельной строкой Prisma.
+  const PLAYER_KEYS = ["player_torrent", "player"];
 
   function readPlayerSetting(key) {
     const fromStorage = window.Prisma?.Storage?.field ? Prisma.Storage.field(key) : undefined;
@@ -2279,12 +2280,9 @@
   }
 
   function writePlayerId(id) {
-    if (window.desktopAPI?.setPlayerSelection) {
-      // Путь не передаём: он должен пережить переключение на встроенный и обратно.
-      window.desktopAPI.setPlayerSelection(id, "");
-      return;
-    }
-
+    // Пишем ключи сами, а не через desktopAPI.setPlayerSelection: тот заодно
+    // переключает player_iptv, а IPTV этот пункт настраивать не должен.
+    // Путь к внешнему плееру не трогаем — он нужен при возврате к внешнему.
     PLAYER_KEYS.forEach((key) => {
       localStorage.setItem(key, id);
       try {

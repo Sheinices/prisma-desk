@@ -66,7 +66,12 @@ jobs:
       - name: Install JS deps
         run: npm ci
 
+      # На macOS-раннерах bundle_dmg.sh изредка падает на hdiutil (гонка за /Volumes):
+      # в одном и том же прогоне arm64 собирается, а x64 падает за 6 секунд без вывода.
+      # Поэтому первая попытка не роняет job, а повторная идёт по прогретому кэшу.
       - name: Build and publish release assets
+        id: release
+        continue-on-error: true
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -86,6 +91,21 @@ jobs:
           # Без --no-sign: вопреки описанию в справке CLI, этот флаг отключает
           # и подпись апдейтера тоже ("Updater signing is skipped due to --no-sign flag"),
           # а значит .sig не создаётся и latest.json собрать не из чего.
+          args: --target ${{ matrix.target }}
+
+      - name: Retry release build (bundle_dmg.sh flake)
+        if: steps.release.outcome == 'failure'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: Prisma Desktop ${{ github.ref_name }}
+          releaseBody: Automated release build for Prisma Desktop.
+          releaseDraft: false
+          prerelease: false
           args: --target ${{ matrix.target }}
 
       - name: Create Windows portable zip

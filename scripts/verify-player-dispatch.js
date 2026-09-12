@@ -229,10 +229,14 @@ const placementCases = [
 ];
 const modeCases = [
   {
-    name: "внешний → встроенный: все ключи становятся inner",
+    name: "внешний → встроенный: видео и торренты становятся inner",
     run: () => runMode({ start: { player_torrent: "potplayer" }, path: POT, action: "inner" }),
-    check: ({ store }) =>
-      store.player_torrent === "inner" && store.player === "inner" && store.player_iptv === "inner",
+    check: ({ store }) => store.player_torrent === "inner" && store.player === "inner",
+  },
+  {
+    name: "IPTV переключатель не трогает",
+    run: () => runMode({ start: { player_torrent: "potplayer", player_iptv: "potplayer" }, path: POT, action: "inner" }),
+    check: ({ store }) => store.player_iptv === "potplayer",
   },
   {
     name: "переключение на встроенный сохраняет путь к внешнему",
@@ -270,13 +274,12 @@ const modeCases = [
     check: ({ result }) => result.needsSetup === true,
   },
   {
-    name: "через мост: setPlayerSelection зовётся с inner и без пути",
-    run: () => runMode({ start: { player_torrent: "potplayer" }, path: POT, action: "inner", withBridge: true }),
+    name: "мост не используется: setPlayerSelection переключил бы и IPTV",
+    run: () => runMode({ start: { player_torrent: "potplayer", player_iptv: "potplayer" }, path: POT, action: "inner", withBridge: true }),
     check: ({ bridgeCalls, store }) =>
-      bridgeCalls.length === 1 &&
-      bridgeCalls[0].id === "inner" &&
-      !bridgeCalls[0].playerPath &&
+      bridgeCalls.length === 0 &&
       store.player_torrent === "inner" &&
+      store.player_iptv === "potplayer" &&
       store.player_nw_path === POT,
   },
   {
