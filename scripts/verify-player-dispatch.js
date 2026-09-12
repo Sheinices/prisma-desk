@@ -150,16 +150,25 @@ const EXTERNAL_ID_KEY = "app_external_player_id";
 // Минимальная подделка DOM: нужны только те методы, которыми пользуется
 // placePlayerModeSetting.
 
-function makeNode(name, parent = null) {
+function makeNode(name, parent = null, { title = null } = {}) {
   return {
     dataName: name,
+    textContent: title || "",
+    isTitle: Boolean(title),
     parentElement: parent,
     closestResult: null,
+    get nextElementSibling() {
+      if (!this.parentElement) return null;
+      const at = this.parentElement.children.indexOf(this);
+      return at < 0 ? null : this.parentElement.children[at + 1] || null;
+    },
     closest(selector) {
       return selector === ".settings-param-body" ? this.closestResult : null;
     },
   };
 }
+
+const PLAYER_TITLE = "Чем смотреть";
 
 function makeContainer(names, { withBody = false } = {}) {
   const container = {
@@ -179,10 +188,14 @@ function makeContainer(names, { withBody = false } = {}) {
       if (!match) return null;
       return this.children.find((child) => child.dataName === match[1]) || null;
     },
+    querySelectorAll(selector) {
+      if (selector !== ".settings-param-title") return [];
+      return this.children.filter((child) => child.isTitle);
+    },
   };
 
   names.forEach((name) => {
-    const node = makeNode(name, container);
+    const node = name === "@title" ? makeNode("@title", container, { title: PLAYER_TITLE }) : makeNode(name, container);
     if (withBody) node.closestResult = container;
     container.children.push(node);
   });
@@ -196,8 +209,17 @@ function placementCase({ names, withBody }) {
   if (withBody) ours.closestResult = container;
   container.children.push(ours);
 
-  const doc = { querySelector: (selector) => container.querySelector(selector) };
-  const context = { document: doc, console };
+  const doc = {
+    querySelector: (selector) => container.querySelector(selector),
+    querySelectorAll: (selector) => container.querySelectorAll(selector),
+  };
+  const context = {
+    document: doc,
+    console,
+    String,
+    Prisma: { Lang: { translate: (key) => (key === "settings_player_which" ? PLAYER_TITLE : key) } },
+  };
+  context.window = { Prisma: context.Prisma };
   vm.createContext(context);
   vm.runInContext(code, context);
 
@@ -207,7 +229,12 @@ function placementCase({ names, withBody }) {
 
 const placementCases = [
   {
-    name: "есть родной выбор плеера — встаём перед ним",
+    name: "встаём сразу после заголовка «Чем смотреть»",
+    run: () => placementCase({ names: ["@title", "player", "player_torrent", "player_nw_path"], withBody: true }),
+    check: ({ how, order }) => how === "after-title" && order[0] === "@title" && order[1] === "app_player_mode",
+  },
+  {
+    name: "заголовка нет — встаём перед строкой выбора плеера",
     run: () => placementCase({ names: ["player", "player_timecode", "player_nw_path"], withBody: true }),
     check: ({ how, order }) => how === "before-native" && order[0] === "app_player_mode",
   },

@@ -620,10 +620,20 @@
         Prisma.Settings.update();
       },
       onRender: function (element) {
-        setTimeout(function () {
+        var attempts = 0;
+
+        var place = function () {
           var node = element && element.nodeType ? element : element && element[0];
-          placePlayerModeSetting(node);
-        }, 0);
+          var how = placePlayerModeSetting(node);
+
+          // Раздел настроек мог ещё не дорисоваться — тогда заголовок и строка
+          // выбора плеера не найдены, и пункт остаётся в конце списка.
+          if (how !== "after-title" && how !== "before-native" && attempts++ < 5) {
+            setTimeout(place, 100);
+          }
+        };
+
+        setTimeout(place, 0);
       },
     });
 
@@ -2294,7 +2304,9 @@
   }
 
   /**
-   * Ставит пункт «Плеер» в начало раздела
+   * Ставит пункт сразу после заголовка «Чем смотреть» (.settings-param-title),
+   * то есть в начале блока выбора плеера. Якорь player_nw_path не подходит:
+   * эта строка лежит ниже, среди настроек для продвинутых.
    */
   function placePlayerModeSetting(node, doc) {
     if (!node) return "skipped";
@@ -2302,21 +2314,43 @@
     const scope = doc || (typeof document !== "undefined" ? document : null);
     if (!scope) return "skipped";
 
-    // 1. Рядом с родным выбором плеера, если Prisma его показывает.
+    const insertAfter = (anchor) => {
+      const parent = anchor.parentElement;
+      if (!parent) return false;
+      parent.insertBefore(node, anchor.nextElementSibling || null);
+      return true;
+    };
+
+    // 1. Сразу после заголовка «Чем смотреть». Текст берём из словаря самой
+    // Prisma (ключ settings_player_which), поэтому работает на любом языке.
+    const titleText = window.Prisma?.Lang?.translate
+      ? String(Prisma.Lang.translate("settings_player_which") || "").trim()
+      : "";
+
+    if (titleText) {
+      const titles = scope.querySelectorAll(".settings-param-title");
+      for (const title of titles) {
+        if (title !== node && String(title.textContent || "").trim() === titleText) {
+          if (insertAfter(title)) return "after-title";
+        }
+      }
+    }
+
+    // 2. Иначе — перед строкой выбора плеера: она идёт сразу за заголовком.
     const nativePlayerRow = scope.querySelector('div[data-name="player"]');
     if (nativePlayerRow && nativePlayerRow !== node && nativePlayerRow.parentElement) {
       nativePlayerRow.parentElement.insertBefore(node, nativePlayerRow);
       return "before-native";
     }
 
-    // 2. Иначе — первым в теле раздела настроек.
+    // 3. Иначе — первым в теле раздела настроек.
     const body = node.closest ? node.closest(".settings-param-body") : null;
     if (body) {
       if (body.firstElementChild !== node) body.insertBefore(node, body.firstElementChild);
       return "body-first";
     }
 
-    // 3. Последний рубеж — первым среди соседей.
+    // 4. Последний рубеж — первым среди соседей.
     const parent = node.parentElement;
     if (parent) {
       if (parent.firstElementChild !== node) parent.insertBefore(node, parent.firstElementChild);
