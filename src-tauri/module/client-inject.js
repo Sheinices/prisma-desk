@@ -482,7 +482,7 @@
 
       // Плееры
       app_settings_player_find: {
-        ru: "Внешний проигрыватель",
+        ru: "Внешний плеер",
         en: "External player",
         uk: "Зовнішній програвач",
       },
@@ -492,7 +492,7 @@
         uk: "Вибрати VLC, PotPlayer або інший програвач",
       },
       app_settings_player_mode: {
-        ru: "Проигрыватель: видео и торренты",
+        ru: "Плеер",
         en: "Player: video and torrents",
         uk: "Програвач: відео та торенти",
       },
@@ -2288,7 +2288,7 @@
   }
 
   /**
-   * Ставит пункт «Проигрыватель» в начало раздела
+   * Ставит пункт «Плеер» в начало раздела
    */
   function placePlayerModeSetting(node, doc) {
     if (!node) return "skipped";
@@ -2659,7 +2659,7 @@
     ];
 
     Prisma.Select.show({
-      title: "Внешний проигрыватель",
+      title: "Внешний плеер",
       items,
       onSelect: async (item) => {
         let result = null;
