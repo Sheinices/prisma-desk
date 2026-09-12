@@ -621,8 +621,8 @@
       },
       onRender: function (element) {
         setTimeout(function () {
-          var anchor = $('div[data-name="player_nw_path"]');
-          if (anchor.length) anchor.before(element);
+          var node = element && element.nodeType ? element : element && element[0];
+          placePlayerModeSetting(node);
         }, 0);
       },
     });
@@ -2251,7 +2251,9 @@
     // Регулярка была перевязана лишними экранированиями: \\. требовал обратный слеш
     // перед "exe", поэтому реальные пути вида ...\PotPlayerMini64.exe не совпадали
     // никогда и распознавание PotPlayer по пути не работало.
-    return /(?:^|[\\/])PotPlayer(?:Mini64|Mini|64)?\.exe$/i.test(String(path || ""));
+    // Путь мог прийти с пробелами или в кавычках — нормализуем перед сверкой.
+    const normalized = String(path || "").trim().replace(/^"+|"+$/g, "");
+    return /(?:^|[\\/])PotPlayer(?:Mini64|Mini|64)?\.exe$/i.test(normalized);
   }
 
   // Запоминаем, какой внешний плеер был выбран, чтобы вернуть его при переключении назад.
@@ -2294,6 +2296,39 @@
   }
 
   /**
+   * Ставит пункт «Проигрыватель» в начало раздела
+   */
+  function placePlayerModeSetting(node, doc) {
+    if (!node) return "skipped";
+
+    const scope = doc || (typeof document !== "undefined" ? document : null);
+    if (!scope) return "skipped";
+
+    // 1. Рядом с родным выбором плеера, если Prisma его показывает.
+    const nativePlayerRow = scope.querySelector('div[data-name="player"]');
+    if (nativePlayerRow && nativePlayerRow !== node && nativePlayerRow.parentElement) {
+      nativePlayerRow.parentElement.insertBefore(node, nativePlayerRow);
+      return "before-native";
+    }
+
+    // 2. Иначе — первым в теле раздела настроек.
+    const body = node.closest ? node.closest(".settings-param-body") : null;
+    if (body) {
+      if (body.firstElementChild !== node) body.insertBefore(node, body.firstElementChild);
+      return "body-first";
+    }
+
+    // 3. Последний рубеж — первым среди соседей.
+    const parent = node.parentElement;
+    if (parent) {
+      if (parent.firstElementChild !== node) parent.insertBefore(node, parent.firstElementChild);
+      return "parent-first";
+    }
+
+    return "skipped";
+  }
+
+  /**
    * Переключает режим проигрывателя.
    * Возвращает { mode, id, needsSetup } — needsSetup означает, что внешний плеер
    * ещё не настроен и нужно показать выбор.
@@ -2310,7 +2345,16 @@
     }
 
     const saved = localStorage.getItem(EXTERNAL_PLAYER_ID_KEY) || "";
-    const id = saved && saved !== "inner" ? saved : externalPlayerIdForPath(readPlayerSetting("player_nw_path"));
+    const byPath = externalPlayerIdForPath(readPlayerSetting("player_nw_path"));
+
+    // Путь важнее сохранённого ярлыка: с id "other"/"vlc" при бинарнике PotPlayer
+    // настройки показывали бы одно, а таймкоды читались бы не тем способом.
+    const id =
+      byPath === "potplayer"
+        ? "potplayer"
+        : saved && saved !== "inner"
+          ? saved
+          : byPath;
 
     if (!id) {
       // Ни сохранённого выбора, ни пути — пусть пользователь выберет плеер.
@@ -2708,12 +2752,13 @@
       // потому что путь к нему остаётся в player_nw_path после автоопределения.
       if (player === "inner") return false;
 
+      // Если настроенный бинарник — PotPlayer, запускаем его через IPC-ветку
+      // независимо от того, каким id он подписан ("other", "vlc" после старых
+      // настроек): иначе запуск уходит в обычный spawn и таймкоды не читаются.
+      // Явный выбор встроенного плеера отсечён выше и сюда не доходит.
       const isPotPlayer =
         isWindows() &&
-        (player === "potplayer" ||
-          // Путь распознаём только для "Другого плеера": иначе эвристика
-          // переопределяла бы явно выбранный плеер.
-          (player === "other" && externalPlayerPathLooksPotPlayer(playerPath)));
+        (player === "potplayer" || externalPlayerPathLooksPotPlayer(playerPath));
 
       if (isPotPlayer) {
         const key = externalMediaKey(data, mode);

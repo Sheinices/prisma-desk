@@ -91,6 +91,11 @@ const cases = [
   { name: "\"Другой плеер\" без пути — падаем во встроенный", args: { player: "other", playerPath: "" }, expect: "inner" },
   { name: "плеер не выбран — встроенный", args: { player: null, playerPath: "" }, expect: "inner" },
   { name: "выбран VLC с путём — прямой запуск", args: { player: "vlc", playerPath: VLC }, expect: "spawn" },
+  { name: "ярлык \"vlc\", а бинарник PotPlayer — таймкоды всё равно читаются", args: { player: "vlc", playerPath: POT }, expect: "potplayer" },
+  { name: "ярлык \"other\", а бинарник PotPlayer — таймкоды читаются", args: { player: "other", playerPath: POT }, expect: "potplayer" },
+  { name: "путь с пробелами по краям распознаётся", args: { player: "other", playerPath: `  ${POT} ` }, expect: "potplayer" },
+  { name: "путь в кавычках распознаётся", args: { player: "other", playerPath: `"${POT}"` }, expect: "potplayer" },
+  { name: "PotPlayer.exe без Mini распознаётся", args: { player: "other", playerPath: "D:\\Player\\PotPlayer.exe" }, expect: "potplayer" },
 ];
 
 // --- переключение встроенный / внешний ---------------------------------------
@@ -140,6 +145,88 @@ function runMode({ start, path, saved, action, withBridge = false }) {
 }
 
 const EXTERNAL_ID_KEY = "app_external_player_id";
+
+// --- размещение пункта в списке настроек -------------------------------------
+// Минимальная подделка DOM: нужны только те методы, которыми пользуется
+// placePlayerModeSetting.
+
+function makeNode(name, parent = null) {
+  return {
+    dataName: name,
+    parentElement: parent,
+    closestResult: null,
+    closest(selector) {
+      return selector === ".settings-param-body" ? this.closestResult : null;
+    },
+  };
+}
+
+function makeContainer(names, { withBody = false } = {}) {
+  const container = {
+    children: [],
+    get firstElementChild() {
+      return this.children[0] || null;
+    },
+    insertBefore(node, ref) {
+      const from = this.children.indexOf(node);
+      if (from >= 0) this.children.splice(from, 1);
+      const at = ref ? this.children.indexOf(ref) : this.children.length;
+      this.children.splice(at < 0 ? this.children.length : at, 0, node);
+      node.parentElement = this;
+    },
+    querySelector(selector) {
+      const match = /div\[data-name="(.+)"\]/.exec(selector);
+      if (!match) return null;
+      return this.children.find((child) => child.dataName === match[1]) || null;
+    },
+  };
+
+  names.forEach((name) => {
+    const node = makeNode(name, container);
+    if (withBody) node.closestResult = container;
+    container.children.push(node);
+  });
+
+  return container;
+}
+
+function placementCase({ names, withBody }) {
+  const container = makeContainer(names, { withBody });
+  const ours = makeNode("app_player_mode", container);
+  if (withBody) ours.closestResult = container;
+  container.children.push(ours);
+
+  const doc = { querySelector: (selector) => container.querySelector(selector) };
+  const context = { document: doc, console };
+  vm.createContext(context);
+  vm.runInContext(code, context);
+
+  const how = context.placePlayerModeSetting(ours, doc);
+  return { how, order: container.children.map((child) => child.dataName) };
+}
+
+const placementCases = [
+  {
+    name: "есть родной выбор плеера — встаём перед ним",
+    run: () => placementCase({ names: ["player", "player_timecode", "player_nw_path"], withBody: true }),
+    check: ({ how, order }) => how === "before-native" && order[0] === "app_player_mode",
+  },
+  {
+    name: "родного пункта нет — встаём первыми в теле раздела",
+    run: () => placementCase({ names: ["player_timecode", "player_nw_path"], withBody: true }),
+    check: ({ how, order }) => how === "body-first" && order[0] === "app_player_mode",
+  },
+  {
+    name: "тела раздела не нашли — первыми среди соседей",
+    run: () => placementCase({ names: ["player_timecode", "player_nw_path"], withBody: false }),
+    check: ({ how, order }) => how === "parent-first" && order[0] === "app_player_mode",
+  },
+  {
+    name: "не уезжаем вниз к player_nw_path",
+    run: () => placementCase({ names: ["player", "player_nw_path"], withBody: true }),
+    check: ({ order }) => order.indexOf("app_player_mode") < order.indexOf("player_nw_path"),
+  },
+];
 const modeCases = [
   {
     name: "внешний → встроенный: все ключи становятся inner",
@@ -161,6 +248,21 @@ const modeCases = [
     name: "внешний без сохранённого выбора: плеер угадывается по пути",
     run: () => runMode({ start: { player_torrent: "inner" }, path: POT, action: "external" }),
     check: ({ result }) => result.id === "potplayer" && !result.needsSetup,
+  },
+  {
+    name: "сохранён \"other\", но путь ведёт на PotPlayer — режим становится potplayer",
+    run: () => runMode({ start: { player_torrent: "inner" }, path: POT, saved: "other", action: "external" }),
+    check: ({ result, store }) => result.id === "potplayer" && store.player_torrent === "potplayer",
+  },
+  {
+    name: "сохранён \"vlc\", но путь ведёт на PotPlayer — режим становится potplayer",
+    run: () => runMode({ start: { player_torrent: "inner" }, path: POT, saved: "vlc", action: "external" }),
+    check: ({ result }) => result.id === "potplayer",
+  },
+  {
+    name: "сохранён \"vlc\" и путь на VLC — остаётся vlc",
+    run: () => runMode({ start: { player_torrent: "inner" }, path: VLC, saved: "vlc", action: "external" }),
+    check: ({ result }) => result.id === "vlc",
   },
   {
     name: "внешний без пути и без выбора: просим настроить",
@@ -193,7 +295,7 @@ for (const testCase of cases) {
   console.log(`${ok ? "ok  " : "FAIL"}  ${testCase.name}: ${target}${ok ? "" : ` (ожидалось ${testCase.expect})`}`);
 }
 
-for (const testCase of modeCases) {
+for (const testCase of [...modeCases, ...placementCases]) {
   let ok = false;
   let detail = "";
   try {
@@ -207,6 +309,6 @@ for (const testCase of modeCases) {
   console.log(`${ok ? "ok  " : "FAIL"}  ${testCase.name}${ok ? "" : ` -> ${detail}`}`);
 }
 
-const total = cases.length + modeCases.length;
+const total = cases.length + modeCases.length + placementCases.length;
 console.log(failed ? `\n${failed} из ${total} не прошли` : `\nвсе ${total} проверки пройдены`);
 process.exit(failed ? 1 : 0);
