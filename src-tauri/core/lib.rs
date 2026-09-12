@@ -1254,7 +1254,6 @@ fn initialize_prisma_defaults(window: &tauri::Webview, state: &tauri::State<'_, 
     let defaults = json!({
         "device_name": hostname,
         "platform": "desktop",
-        "player_torrent": "other",
         "poster_size": "w500",
         "torrserver_url": format!("http://localhost:{}", ts_port),
         "torrserver_use_link": "one"
@@ -1302,6 +1301,12 @@ fn initialize_prisma_defaults(window: &tauri::Webview, state: &tauri::State<'_, 
           potPlayerPath ? "potplayer" : "other",
         );
         localStorage.setItem("player", potPlayerPath ? "potplayer" : "other");
+      }} else if (playerTorrent === null || playerTorrent === "other") {{
+        // Внешнего плеера на машине нет. При "other" без пути сайт ждёт внешний
+        // запуск и не включает встроенный — воспроизведение просто не стартует,
+        // поэтому в такой конфигурации оставляем встроенный плеер.
+        localStorage.setItem("player_torrent", "inner");
+        localStorage.setItem("player", "inner");
       }}
     }}
   }} catch (e) {{

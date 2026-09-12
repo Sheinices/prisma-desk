@@ -2,3 +2,5 @@
 /node_modules
 *.txt
 .DS_Store
+.DS_Store
+scripts/make-windows-ico.py

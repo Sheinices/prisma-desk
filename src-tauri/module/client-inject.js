@@ -491,6 +491,26 @@
         en: "Choose VLC, PotPlayer, or another player",
         uk: "Вибрати VLC, PotPlayer або інший програвач",
       },
+      app_settings_player_mode: {
+        ru: "Проигрыватель",
+        en: "Player",
+        uk: "Програвач",
+      },
+      app_settings_player_mode_description: {
+        ru: "Встроенный плеер Prisma или внешний",
+        en: "Built-in Prisma player or an external one",
+        uk: "Вбудований програвач Prisma або зовнішній",
+      },
+      app_settings_player_mode_inner: {
+        ru: "Встроенный",
+        en: "Built-in",
+        uk: "Вбудований",
+      },
+      app_settings_player_mode_external: {
+        ru: "Внешний",
+        en: "External",
+        uk: "Зовнішній",
+      },
 
       // О приложении
       app_about_title: {
@@ -569,6 +589,43 @@
     );
 
     const settingsManager = new SettingsManager("app_settings");
+
+    Prisma.SettingsApi.addParam({
+      component: "player",
+      param: {
+        name: "app_player_mode",
+        type: "select",
+        values: {
+          inner: Prisma.Lang.translate("app_settings_player_mode_inner"),
+          external: Prisma.Lang.translate("app_settings_player_mode_external"),
+        },
+        default: currentPlayerMode(),
+      },
+      field: {
+        name: Prisma.Lang.translate("app_settings_player_mode"),
+        description: Prisma.Lang.translate("app_settings_player_mode_description"),
+      },
+      onChange: async (value) => {
+        const result = applyPlayerMode(value === "inner" ? "inner" : "external");
+
+        if (result.needsSetup) {
+          Prisma.Loading.start(
+            () => {},
+            `${Prisma.Lang.translate("app_settings_player_find")}...`,
+          );
+          await configureExternalPlayer();
+          Prisma.Loading.stop();
+        }
+
+        Prisma.Settings.update();
+      },
+      onRender: function (element) {
+        setTimeout(function () {
+          var anchor = $('div[data-name="player_nw_path"]');
+          if (anchor.length) anchor.before(element);
+        }, 0);
+      },
+    });
 
     Prisma.SettingsApi.addParam({
       component: "player",
@@ -2191,7 +2248,77 @@
   }
 
   function externalPlayerPathLooksPotPlayer(path) {
-    return /(?:^|[\\\\/])PotPlayer(?:Mini64|Mini|64)?\\.exe$/i.test(String(path || ""));
+    // Регулярка была перевязана лишними экранированиями: \\. требовал обратный слеш
+    // перед "exe", поэтому реальные пути вида ...\PotPlayerMini64.exe не совпадали
+    // никогда и распознавание PotPlayer по пути не работало.
+    return /(?:^|[\\/])PotPlayer(?:Mini64|Mini|64)?\.exe$/i.test(String(path || ""));
+  }
+
+  // Запоминаем, какой внешний плеер был выбран, чтобы вернуть его при переключении назад.
+  const EXTERNAL_PLAYER_ID_KEY = "app_external_player_id";
+  const PLAYER_KEYS = ["player_torrent", "player_iptv", "player"];
+
+  function readPlayerSetting(key) {
+    const fromStorage = window.Prisma?.Storage?.field ? Prisma.Storage.field(key) : undefined;
+    if (fromStorage !== undefined && fromStorage !== null && fromStorage !== "") return String(fromStorage);
+    const value = localStorage.getItem(key);
+    return value === null ? "" : String(value);
+  }
+
+  function currentPlayerMode() {
+    const id = readPlayerSetting("player_torrent") || readPlayerSetting("player");
+    return id === "inner" ? "inner" : "external";
+  }
+
+  // Какой внешний плеер подразумевает сохранённый путь.
+  function externalPlayerIdForPath(path) {
+    if (!path) return "";
+    return externalPlayerPathLooksPotPlayer(path) ? "potplayer" : "other";
+  }
+
+  function writePlayerId(id) {
+    if (window.desktopAPI?.setPlayerSelection) {
+      // Путь не передаём: он должен пережить переключение на встроенный и обратно.
+      window.desktopAPI.setPlayerSelection(id, "");
+      return;
+    }
+
+    PLAYER_KEYS.forEach((key) => {
+      localStorage.setItem(key, id);
+      try {
+        window.Prisma?.Storage?.set(key, id);
+      } catch {
+        // noop
+      }
+    });
+  }
+
+  /**
+   * Переключает режим проигрывателя.
+   * Возвращает { mode, id, needsSetup } — needsSetup означает, что внешний плеер
+   * ещё не настроен и нужно показать выбор.
+   */
+  function applyPlayerMode(mode) {
+    if (mode === "inner") {
+      const previous = readPlayerSetting("player_torrent") || readPlayerSetting("player");
+      if (previous && previous !== "inner") {
+        localStorage.setItem(EXTERNAL_PLAYER_ID_KEY, previous);
+      }
+
+      writePlayerId("inner");
+      return { mode: "inner", id: "inner", needsSetup: false };
+    }
+
+    const saved = localStorage.getItem(EXTERNAL_PLAYER_ID_KEY) || "";
+    const id = saved && saved !== "inner" ? saved : externalPlayerIdForPath(readPlayerSetting("player_nw_path"));
+
+    if (!id) {
+      // Ни сохранённого выбора, ни пути — пусть пользователь выберет плеер.
+      return { mode: "external", id: "", needsSetup: true };
+    }
+
+    writePlayerId(id);
+    return { mode: "external", id, needsSetup: false };
   }
 
   function externalTimelineHash(data, mode) {
@@ -2575,9 +2702,18 @@
       if (!safeUrl) return false;
 
       const playerPath = Prisma.Storage.field("player_nw_path");
+
+      // Явный выбор встроенного плеера важнее сохранённого пути к внешнему.
+      // Без этого на Windows PotPlayer перехватывал запуск даже при выборе "inner",
+      // потому что путь к нему остаётся в player_nw_path после автоопределения.
+      if (player === "inner") return false;
+
       const isPotPlayer =
         isWindows() &&
-        (player === "potplayer" || externalPlayerPathLooksPotPlayer(playerPath));
+        (player === "potplayer" ||
+          // Путь распознаём только для "Другого плеера": иначе эвристика
+          // переопределяла бы явно выбранный плеер.
+          (player === "other" && externalPlayerPathLooksPotPlayer(playerPath)));
 
       if (isPotPlayer) {
         const key = externalMediaKey(data, mode);
