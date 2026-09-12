@@ -496,6 +496,11 @@
         en: "Player: video and torrents",
         uk: "Програвач: відео та торенти",
       },
+      app_settings_player_mode_description: {
+        ru: "Встроенный или внешний плеер Pot Player или VLC ",
+        en: "Sets both at once. IPTV and the rest are in Prisma's options below",
+        uk: "Задає обидва одразу. IPTV та інше — у налаштуваннях Prisma нижче",
+      },
       app_settings_player_mode_inner: {
         ru: "Встроенный",
         en: "Built-in",
@@ -598,6 +603,7 @@
       },
       field: {
         name: Prisma.Lang.translate("app_settings_player_mode"),
+        description: Prisma.Lang.translate("app_settings_player_mode_description"),
       },
       onChange: async (value) => {
         const result = applyPlayerMode(value === "inner" ? "inner" : "external");
