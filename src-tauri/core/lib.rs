@@ -1290,24 +1290,28 @@ fn initialize_prisma_defaults(window: &tauri::Webview, state: &tauri::State<'_, 
     const vlcPath = {vlc_path_js};
     const potPlayerPath = {pot_player_path_js};
     const existingPath = localStorage.getItem("player_nw_path");
-    const playerTorrent = localStorage.getItem("player_torrent");
 
-    if ((!existingPath || !existingPath.length) && playerTorrent !== "inner") {{
+    // Путь к найденному внешнему плееру сохраняем заранее: он пригодится,
+    // если пользователь сам переключится на внешний. Сам плеер при этом
+    // не выбираем — выбор остаётся за пользователем.
+    if (!existingPath || !existingPath.length) {{
       const preferredPath = potPlayerPath || vlcPath;
-      if (preferredPath) {{
-        localStorage.setItem("player_nw_path", preferredPath);
-        localStorage.setItem(
-          "player_torrent",
-          potPlayerPath ? "potplayer" : "other",
-        );
-        localStorage.setItem("player", potPlayerPath ? "potplayer" : "other");
-      }} else if (playerTorrent === null || playerTorrent === "other") {{
-        // Внешнего плеера на машине нет. При "other" без пути сайт ждёт внешний
-        // запуск и не включает встроенный — воспроизведение просто не стартует,
-        // поэтому в такой конфигурации оставляем встроенный плеер.
-        localStorage.setItem("player_torrent", "inner");
-        localStorage.setItem("player", "inner");
-      }}
+      if (preferredPath) localStorage.setItem("player_nw_path", preferredPath);
+    }}
+
+    // По умолчанию в десктопе играем встроенным плеером. Раньше здесь
+    // автоматически включался найденный PotPlayer или VLC, из-за чего
+    // приложение решало за пользователя.
+    ["player", "player_torrent"].forEach((key) => {{
+      if (localStorage.getItem(key) === null) localStorage.setItem(key, "inner");
+    }});
+
+    // Чиним поломанную комбинацию из старых версий: "внешний плеер" без пути,
+    // при которой сайт ждёт внешний запуск и не включает встроенный.
+    if (!localStorage.getItem("player_nw_path")) {{
+      ["player", "player_torrent"].forEach((key) => {{
+        if (localStorage.getItem(key) === "other") localStorage.setItem(key, "inner");
+      }});
     }}
   }} catch (e) {{
     console.warn("Prisma defaults init failed", e);
