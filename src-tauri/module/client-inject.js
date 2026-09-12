@@ -496,11 +496,6 @@
         en: "Player: video and torrents",
         uk: "Програвач: відео та торенти",
       },
-      app_settings_player_mode_description: {
-        ru: "Задаёт оба сразу. IPTV и остальное — в настройках Prisma ниже",
-        en: "Sets both at once. IPTV and the rest are in Prisma's options below",
-        uk: "Задає обидва одразу. IPTV та інше — у налаштуваннях Prisma нижче",
-      },
       app_settings_player_mode_inner: {
         ru: "Встроенный",
         en: "Built-in",
@@ -603,7 +598,6 @@
       },
       field: {
         name: Prisma.Lang.translate("app_settings_player_mode"),
-        description: Prisma.Lang.translate("app_settings_player_mode_description"),
       },
       onChange: async (value) => {
         const result = applyPlayerMode(value === "inner" ? "inner" : "external");
@@ -2281,7 +2275,7 @@
 
   function writePlayerId(id) {
     // Пишем ключи сами, а не через desktopAPI.setPlayerSelection: тот заодно
-    // переключает player_iptv, а IPTV этот пункт настраивать не должен.
+    // переключает player_iptv, а этот пункт настраивать не должен.
     // Путь к внешнему плееру не трогаем — он нужен при возврате к внешнему.
     PLAYER_KEYS.forEach((key) => {
       localStorage.setItem(key, id);
