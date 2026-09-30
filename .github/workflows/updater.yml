@@ -135,7 +135,7 @@ jobs:
 
       - name: Upload Windows portable to release
         if: matrix.target == 'x86_64-pc-windows-msvc'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
           files: src-tauri/target/${{ matrix.target }}/release/bundle/nsis/Prisma-portable-x64.zip
