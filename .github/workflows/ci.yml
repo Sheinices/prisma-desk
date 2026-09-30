@@ -1,0 +1,164 @@
+# Prisma Desktop — десктопный клиент Prisma на Tauri.
+# Copyright (C) 2026 Sheinices
+#
+# SPDX-License-Identifier: AGPL-3.0-only
+# This file is part of Prisma Desktop, licensed under the GNU Affero General
+# Public License v3.0. See the LICENSE file in the project root for details.
+
+# Проверки на каждый push и pull request: уязвимости в зависимостях,
+# форматирование, clippy, тесты на всех целевых ОС, JS-скрипты и заголовки
+# лицензии. Релизные сборки живут в main.yml и updater.yml.
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+    tags: ["v*"]
+  pull_request:
+  schedule:
+    # Раз в неделю: новые advisories появляются и без изменений в репозитории.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  audit-rust:
+    name: Rust dependencies (cargo-deny)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # advisories — уязвимости и заброшенные крейты из RustSec,
+      # bans — дубликаты и запрещённые крейты, sources — только crates.io.
+      - name: cargo deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: src-tauri/Cargo.toml
+          command: check advisories bans sources
+
+  audit-npm:
+    name: npm dependencies (npm audit)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install JS deps
+        run: npm ci
+
+      - name: npm audit
+        run: npm audit --audit-level=high
+
+  lint:
+    name: Format and license headers
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: cargo fmt
+        run: cargo fmt --check --manifest-path src-tauri/Cargo.toml
+
+      - name: License headers
+        run: node scripts/check-license-headers.mjs
+
+  rust:
+    name: Clippy and tests (${{ matrix.os }})
+    needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # Предупреждения clippy считаем ошибками: локально проект чист,
+      # и в CI регрессии не должны копиться молча.
+      - name: cargo clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+  js:
+    name: JS scripts
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install JS deps
+        run: npm ci
+
+      - name: Syntax check
+        run: |
+          for f in src-tauri/module/*.js web/main.js scripts/*.js scripts/*.mjs; do
+            node --check "$f"
+          done
+
+      - name: Version sync
+        run: node scripts/sync-version.mjs --check
+
+      - name: Player dispatch
+        run: node scripts/verify-player-dispatch.js
+
+      - name: External progress manager
+        run: node scripts/verify-external-progress-manager.js
+
+  # Итоговый статус для branch protection: одна галочка вместо шести.
+  ci-ok:
+    name: CI passed
+    if: always()
+    needs: [audit-rust, audit-npm, lint, rust, js]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check job results
+        run: |
+          echo '${{ toJSON(needs) }}' | grep -Eq '"result": "(failure|cancelled)"' && exit 1
+          echo "all checks passed"

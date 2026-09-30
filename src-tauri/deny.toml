@@ -1,0 +1,26 @@
+# Prisma Desktop — десктопный клиент Prisma на Tauri.
+# Copyright (C) 2026 Sheinices
+#
+# SPDX-License-Identifier: AGPL-3.0-only
+# This file is part of Prisma Desktop, licensed under the GNU Affero General
+# Public License v3.0. See the LICENSE file in the project root for details.
+
+# Настройки cargo-deny для CI (.github/workflows/ci.yml).
+# Уязвимости остаются ошибками; исключения ниже — только для advisories,
+# которые мы не можем закрыть сами, каждое с причиной и датой пересмотра.
+
+[advisories]
+version = 2
+ignore = [
+  # unic-ucd-version не поддерживается, но тянется цепочкой
+  # tauri-utils → urlpattern → unic-ucd-ident. Обновления нет ни у нас,
+  # ни у Tauri. Убрать, когда tauri-utils уйдёт с urlpattern 0.3.
+  { id = "RUSTSEC-2025-0098", reason = "transitive via tauri-utils/urlpattern, no upgrade available (checked 2026-10)" },
+]
+
+[bans]
+multiple-versions = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

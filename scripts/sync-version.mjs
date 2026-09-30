@@ -11,6 +11,7 @@
 // а Cargo.toml/Cargo.lock подтягиваются этим скриптом:
 //   npm run sync:version
 // Также запускается автоматически при `npm version <патч|минор|...>`.
+// С флагом --check ничего не пишет, а падает, если версии разъехались (для CI).
 
 import fs from "node:fs";
 import path from "node:path";
@@ -21,6 +22,7 @@ const pkgPath = path.join(root, "package.json");
 const cargoTomlPath = path.join(root, "src-tauri", "Cargo.toml");
 const cargoLockPath = path.join(root, "src-tauri", "Cargo.lock");
 
+const checkOnly = process.argv.includes("--check");
 const version = JSON.parse(fs.readFileSync(pkgPath, "utf8")).version;
 
 if (!/^\d+\.\d+\.\d+/.test(version)) {
@@ -35,6 +37,12 @@ function update(file, pattern, replacement) {
   const after = before.replace(pattern, replacement);
 
   if (before === after) return false;
+
+  if (checkOnly) {
+    console.error(`${path.relative(root, file)}: версия не совпадает с package.json (${version})`);
+    process.exitCode = 1;
+    return true;
+  }
 
   fs.writeFileSync(file, after);
   console.log(`${path.relative(root, file)} → ${version}`);
@@ -61,4 +69,8 @@ if (tauriConf.version !== "../package.json") {
   );
 }
 
-console.log(`версия синхронизирована: ${version}`);
+if (process.exitCode) {
+  console.error("запустите `npm run sync:version`, чтобы выровнять версии");
+} else {
+  console.log(checkOnly ? `версии совпадают: ${version}` : `версия синхронизирована: ${version}`);
+}
