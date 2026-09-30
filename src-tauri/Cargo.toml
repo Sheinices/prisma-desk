@@ -31,7 +31,7 @@ rfd = "0.15"
 tiny_http = "0.12"
 
 [target.'cfg(windows)'.dependencies]
-winreg = "0.55"
+winreg = "0.56"
 
 # Размер и скорость релизного бинарника: LTO и один codegen-unit дают
 # межкрейтовую оптимизацию, strip убирает символы, panic=abort — unwind-таблицы.
