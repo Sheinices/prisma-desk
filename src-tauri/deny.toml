@@ -12,10 +12,10 @@
 [advisories]
 version = 2
 ignore = [
-  # unic-ucd-version не поддерживается, но тянется цепочкой
-  # tauri-utils → urlpattern → unic-ucd-ident. Обновления нет ни у нас,
-  # ни у Tauri. Убрать, когда tauri-utils уйдёт с urlpattern 0.3.
-  { id = "RUSTSEC-2025-0098", reason = "transitive via tauri-utils/urlpattern, no upgrade available (checked 2026-10)" },
+  # proc-macro-error заброшен, но тянется через GTK-биндинги (glib-macros) на Linux
+  # (см. `cargo tree -i proc-macro-error --target all`). Это макрос времени
+  # компиляции, в бинарник не попадает. Убрать, когда исчезнет из дерева.
+  { id = "RUSTSEC-2024-0370", reason = "transitive build-time proc-macro via Tauri deps, no upgrade available (checked 2026-10)" },
 ]
 
 [bans]
