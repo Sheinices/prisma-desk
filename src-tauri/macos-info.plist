@@ -1,4 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Prisma Desktop — десктопный клиент Prisma на Tauri.
+  Copyright (C) 2026 Sheinices
+
+  SPDX-License-Identifier: AGPL-3.0-only
+  This file is part of Prisma Desktop, licensed under the GNU Affero General
+  Public License v3.0. See the LICENSE file in the project root for details.
+-->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>

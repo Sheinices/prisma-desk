@@ -1,3 +1,10 @@
+// Prisma Desktop — десктопный клиент Prisma на Tauri.
+// Copyright (C) 2026 Sheinices
+//
+// SPDX-License-Identifier: AGPL-3.0-only
+// This file is part of Prisma Desktop, licensed under the GNU Affero General
+// Public License v3.0. See the LICENSE file in the project root for details.
+
 use serde_json::{json, Map, Value};
 use std::fs;
 use std::io::Write;
@@ -95,12 +102,7 @@ pub fn push_mirror_history(history: &[String], url: &str, limit: usize) -> Vec<S
     }
 
     let mut result = vec![url.to_string()];
-    result.extend(
-        history
-            .iter()
-            .filter(|item| item.as_str() != url)
-            .cloned(),
-    );
+    result.extend(history.iter().filter(|item| item.as_str() != url).cloned());
     result.truncate(limit.max(1));
     result
 }
@@ -138,11 +140,8 @@ mod tests {
     use std::path::PathBuf;
 
     fn temp_path(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "prisma-store-test-{}-{}",
-            name,
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("prisma-store-test-{}-{}", name, std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         dir.join("store.json")
     }
@@ -200,7 +199,10 @@ mod tests {
         let path = temp_path("persist");
         let mut store = AppStore::load(path.clone());
         store
-            .set("prismaUrl".into(), Value::String("http://mirror.tld".into()))
+            .set(
+                "prismaUrl".into(),
+                Value::String("http://mirror.tld".into()),
+            )
             .unwrap();
 
         assert!(path.exists());

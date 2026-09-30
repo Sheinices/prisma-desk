@@ -1,3 +1,10 @@
+// Prisma Desktop — десктопный клиент Prisma на Tauri.
+// Copyright (C) 2026 Sheinices
+//
+// SPDX-License-Identifier: AGPL-3.0-only
+// This file is part of Prisma Desktop, licensed under the GNU Affero General
+// Public License v3.0. See the LICENSE file in the project root for details.
+
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -295,7 +302,8 @@ mod windows_ipc {
 
     unsafe extern "system" fn collect_window(hwnd: Hwnd, data: Lparam) -> Bool {
         let mut class_buffer = [0u16; 128];
-        let class_length = GetClassNameW(hwnd, class_buffer.as_mut_ptr(), class_buffer.len() as i32);
+        let class_length =
+            GetClassNameW(hwnd, class_buffer.as_mut_ptr(), class_buffer.len() as i32);
         if class_length <= 0 {
             return 1;
         }
@@ -308,7 +316,8 @@ mod windows_ipc {
         }
 
         let mut title_buffer = [0u16; 512];
-        let title_length = GetWindowTextW(hwnd, title_buffer.as_mut_ptr(), title_buffer.len() as i32);
+        let title_length =
+            GetWindowTextW(hwnd, title_buffer.as_mut_ptr(), title_buffer.len() as i32);
         let title = if title_length > 0 {
             String::from_utf16_lossy(&title_buffer[..title_length as usize])
         } else {
@@ -335,7 +344,10 @@ mod windows_ipc {
         result
     }
 
-    fn find_window(candidates: &[WindowInfo], requested_pid: Option<u32>) -> Option<(WindowInfo, bool)> {
+    fn find_window(
+        candidates: &[WindowInfo],
+        requested_pid: Option<u32>,
+    ) -> Option<(WindowInfo, bool)> {
         if let Some(pid) = requested_pid {
             if let Some(window) = candidates.iter().find(|window| window.pid == pid) {
                 return Some((window.clone(), false));

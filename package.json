@@ -1,7 +1,8 @@
 {
   "name": "prisma-desk-rust",
   "private": true,
-  "version": "1.2.5",
+  "version": "1.3.0",
+  "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
     "tauri": "tauri",

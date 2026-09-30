@@ -168,3 +168,7 @@ TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" \
 
 - `src-tauri/capabilities/default.json`
 
+## Лицензия
+
+Проект распространяется под [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0-only).
+Каждый файл исходников содержит заголовок с указанием лицензии.

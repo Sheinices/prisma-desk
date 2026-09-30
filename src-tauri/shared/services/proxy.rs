@@ -1,3 +1,10 @@
+// Prisma Desktop — десктопный клиент Prisma на Tauri.
+// Copyright (C) 2026 Sheinices
+//
+// SPDX-License-Identifier: AGPL-3.0-only
+// This file is part of Prisma Desktop, licensed under the GNU Affero General
+// Public License v3.0. See the LICENSE file in the project root for details.
+
 use std::io::Read;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
@@ -36,9 +43,8 @@ impl ProxyServerManager {
             return Ok(());
         }
 
-        let server = Server::http(("127.0.0.1", PROXY_PORT)).map_err(|e| {
-            format!("не удалось занять порт {PROXY_PORT} для VLC-прокси: {e}")
-        })?;
+        let server = Server::http(("127.0.0.1", PROXY_PORT))
+            .map_err(|e| format!("не удалось занять порт {PROXY_PORT} для VLC-прокси: {e}"))?;
 
         let (tx, rx) = mpsc::channel::<()>();
 
@@ -72,7 +78,7 @@ impl ProxyServerManager {
 }
 
 fn run_proxy_loop(server: Server, shutdown_rx: Receiver<()>) {
-    let client = reqwest::blocking::Client::new();
+    let client = crate::services::http::client();
 
     loop {
         if shutdown_rx.try_recv().is_ok() {
@@ -135,7 +141,9 @@ fn run_proxy_loop(server: Server, shutdown_rx: Receiver<()>) {
                 let mut out = Response::from_data(bytes).with_status_code(StatusCode(status));
 
                 if let Some(content_type) = content_type {
-                    if let Ok(header) = Header::from_bytes(&b"Content-Type"[..], content_type.as_bytes()) {
+                    if let Ok(header) =
+                        Header::from_bytes(&b"Content-Type"[..], content_type.as_bytes())
+                    {
                         out = out.with_header(header);
                     }
                 }

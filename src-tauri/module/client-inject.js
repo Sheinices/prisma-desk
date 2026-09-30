@@ -1,3 +1,10 @@
+// Prisma Desktop — десктопный клиент Prisma на Tauri.
+// Copyright (C) 2026 Sheinices
+//
+// SPDX-License-Identifier: AGPL-3.0-only
+// This file is part of Prisma Desktop, licensed under the GNU Affero General
+// Public License v3.0. See the LICENSE file in the project root for details.
+
 (function () {
   "use strict";
 
@@ -267,6 +274,11 @@
         ru: "Не установлен",
         en: "Not installed",
         uk: "Не встановлено",
+      },
+      app_settings_ts_status_busy: {
+        ru: "Выполняется операция…",
+        en: "Operation in progress…",
+        uk: "Виконується операція…",
       },
       app_settings_ts_status_install_prompt: {
         ru: "Нажмите «Запуск», чтобы установить TorrServer",
@@ -1368,17 +1380,23 @@
                 : Prisma.Lang.translate("app_settings_ts_status_install_prompt"),
             );
 
-          const statusText = status.installed
-            ? status.running
-              ? Prisma.Lang.translate("app_settings_ts_status_installed_running")
-              : Prisma.Lang.translate("app_settings_ts_status_installed_stopped")
-            : Prisma.Lang.translate("app_settings_ts_status_not_installed");
+          // Пока идёт скачивание или запуск, статус приходит сразу с полем busy:
+          // показываем это вместо «Остановлен», чтобы пользователь не жал «Запуск» повторно.
+          const statusText = status.busy
+            ? Prisma.Lang.translate("app_settings_ts_status_busy")
+            : status.installed
+              ? status.running
+                ? Prisma.Lang.translate("app_settings_ts_status_installed_running")
+                : Prisma.Lang.translate("app_settings_ts_status_installed_stopped")
+              : Prisma.Lang.translate("app_settings_ts_status_not_installed");
 
-          const statusColor = status.installed
-            ? status.running
-              ? "#2ad164"
-              : "#ff6b6b"
-            : "#a1a1aa";
+          const statusColor = status.busy
+            ? "#ffb347"
+            : status.installed
+              ? status.running
+                ? "#2ad164"
+                : "#ff6b6b"
+              : "#a1a1aa";
 
           $('[data-name="app_settings_ts_tsStatus"]')
             .find(".settings-param__descr")
@@ -1386,18 +1404,8 @@
             .css({ color: statusColor, fontWeight: "700" });
 
           const localTsAutoStart = localStorage.getItem("tsAutoStart");
-          const normalize = (value) => {
-            if (typeof value === "boolean") return value;
-            if (typeof value === "number") return value !== 0;
-            if (typeof value === "string") {
-              const v = value.trim().toLowerCase();
-              return v === "1" || v === "true" || v === "yes" || v === "on";
-            }
-            return false;
-          };
-
-          const storeEnabled = normalize(tsAutoStartStore);
-          const localEnabled = normalize(localTsAutoStart);
+          const storeEnabled = toBool(tsAutoStartStore);
+          const localEnabled = toBool(localTsAutoStart);
           const port = normalizeTsPort(tsPortStore);
           if (status && status.running) {
             syncTorrServerRuntime(port);
@@ -3000,26 +3008,15 @@
     window.__ts_autostart_done = true;
 
     try {
-      const normalizeBool = (value) => {
-        if (typeof value === "boolean") return value;
-        if (typeof value === "number") return value !== 0;
-        if (typeof value === "string") {
-          const v = value.trim().toLowerCase();
-          return v === "1" || v === "true" || v === "yes" || v === "on";
-        }
-        return false;
-      };
-
       let autoStart = false;
       try {
-        autoStart = normalizeBool(await window.desktopAPI.store.get("tsAutoStart"));
+        autoStart = toBool(await window.desktopAPI.store.get("tsAutoStart"));
       } catch {
         autoStart = false;
       }
 
       if (!autoStart) {
-        const localTsAutoStart = localStorage.getItem("tsAutoStart");
-        autoStart = normalizeBool(localTsAutoStart);
+        autoStart = toBool(localStorage.getItem("tsAutoStart"));
       }
 
       if (!autoStart) {

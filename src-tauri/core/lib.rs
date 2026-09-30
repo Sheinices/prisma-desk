@@ -1,11 +1,19 @@
+// Prisma Desktop — десктопный клиент Prisma на Tauri.
+// Copyright (C) 2026 Sheinices
+//
+// SPDX-License-Identifier: AGPL-3.0-only
+// This file is part of Prisma Desktop, licensed under the GNU Affero General
+// Public License v3.0. See the LICENSE file in the project root for details.
+
 use serde_json::{json, Value};
-use std::collections::HashSet;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use tauri::{Emitter, Manager, WindowEvent};
+use std::time::Duration;
+use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 
 #[path = "../shared/models/mod.rs"]
 mod models;
@@ -13,7 +21,7 @@ mod models;
 mod services;
 
 use models::{AppState, ChildProcessSpawnRequest, CommandResult};
-use services::{player, proxy, store, torrserver};
+use services::{http, player, proxy, store, torrserver};
 
 const BRIDGE_JS: &str = include_str!("../module/bridge.js");
 const PLUGIN_JS: &str = include_str!("../module/client-inject.js");
@@ -56,54 +64,49 @@ fn sanitize_prisma_url(url: &str) -> String {
     trimmed.to_string()
 }
 
+/// Плееры, которые клиент Prisma может запускать через `child_process.spawn`.
+const ALLOWED_PLAYER_COMMANDS: &[&str] = &[
+    "vlc",
+    "kmplayer",
+    "kmplayer64",
+    "potplayer",
+    "potplayermini",
+    "potplayermini64",
+    "mpv",
+    "smplayer",
+    "kodi",
+    "gom",
+    "gom64",
+    "mpc-hc",
+    "mpc-hc64",
+    "mpc-be",
+    "mpc-be64",
+    "quicktime player",
+    "wmplayer",
+    "iina",
+    "elmedia player",
+    "movist",
+    "infuse",
+    "celluloid",
+    "haruna",
+    "dragon",
+    "parole",
+    "5kplayer",
+    "zplayer",
+];
+
+fn is_allowed_player_name(path: &str) -> bool {
+    let name = std::path::Path::new(path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default()
+        .to_lowercase();
+
+    ALLOWED_PLAYER_COMMANDS.contains(&name.as_str())
+}
+
 fn is_whitelisted_command(cmd: &str, resolved: &str) -> bool {
-    let commands: HashSet<&'static str> = HashSet::from([
-        "vlc",
-        "kmplayer",
-        "kmplayer64",
-        "potplayer",
-        "potplayermini",
-        "potplayermini64",
-        "mpv",
-        "smplayer",
-        "kodi",
-        "gom",
-        "gom64",
-        "mpc-hc",
-        "mpc-hc64",
-        "mpc-be",
-        "mpc-be64",
-        "quicktime player",
-        "wmplayer",
-        "iina",
-        "elmedia player",
-        "movist",
-        "infuse",
-        "celluloid",
-        "haruna",
-        "dragon",
-        "parole",
-        "5kplayer",
-        "zplayer",
-    ]);
-
-    let cmd_name = std::path::Path::new(cmd)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or_default()
-        .to_lowercase();
-
-    if commands.contains(cmd_name.as_str()) {
-        return true;
-    }
-
-    let resolved_name = std::path::Path::new(resolved)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or_default()
-        .to_lowercase();
-
-    commands.contains(resolved_name.as_str())
+    is_allowed_player_name(cmd) || is_allowed_player_name(resolved)
 }
 
 #[tauri::command]
@@ -307,10 +310,7 @@ fn close_app(
     window: tauri::WebviewWindow,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    {
-        let mut torr = state.torrserver.lock().expect("torrserver poisoned");
-        let _ = torr.stop(&app);
-    }
+    let _ = state.torrserver.stop(&app);
 
     {
         let mut proxy = state.proxy.lock().expect("proxy poisoned");
@@ -396,13 +396,9 @@ async fn mirror_check(url: String) -> Value {
 
     let request_url = target.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        let client = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(8))
-            .build()
-            .map_err(|e| e.to_string())?;
-
-        client
+        http::client()
             .get(&request_url)
+            .timeout(Duration::from_secs(8))
             .send()
             .map(|response| response.status().as_u16())
             .map_err(|e| e.to_string())
@@ -464,7 +460,11 @@ fn mirror_apply(
 #[tauri::command]
 fn proxy_status(state: tauri::State<'_, AppState>) -> Value {
     let running = state.proxy.lock().expect("proxy poisoned").is_running();
-    let message = state.proxy_error.lock().expect("proxy_error poisoned").clone();
+    let message = state
+        .proxy_error
+        .lock()
+        .expect("proxy_error poisoned")
+        .clone();
 
     json!({
         "running": running,
@@ -849,25 +849,32 @@ fn import_settings_from_file() -> Value {
     }
 }
 
+/// Все операции с TorrServer блокирующие (сеть, процессы, sleep), поэтому
+/// уходят в пул spawn_blocking. Менеджер сам разводит долгие операции
+/// и быстрые запросы статуса, внешней блокировки здесь нет.
+async fn with_torrserver<F>(state: tauri::State<'_, AppState>, op: F) -> Result<Value, String>
+where
+    F: FnOnce(&torrserver::TorrServerManager, &Arc<Mutex<store::AppStore>>) -> Value
+        + Send
+        + 'static,
+{
+    let store = state.store.clone();
+    let torr = state.torrserver.clone();
+
+    match tauri::async_runtime::spawn_blocking(move || op(&torr, &store)).await {
+        Ok(v) => Ok(v),
+        Err(err) => Ok(json!({ "success": false, "message": format!("Join error: {err}") })),
+    }
+}
+
 #[tauri::command]
 async fn torrserver_start(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     args: Option<Vec<String>>,
 ) -> Result<Value, String> {
-    let store = state.store.clone();
-    let torr = state.torrserver.clone();
     let args = args.unwrap_or_default();
-
-    match tauri::async_runtime::spawn_blocking(move || {
-        let mut torr = torr.lock().expect("torrserver poisoned");
-        torr.start(&app, &store, args)
-    })
-    .await
-    {
-        Ok(v) => Ok(v),
-        Err(err) => Ok(json!({ "success": false, "message": format!("Join error: {err}") })),
-    }
+    with_torrserver(state, move |torr, store| torr.start(&app, store, args)).await
 }
 
 #[tauri::command]
@@ -875,17 +882,7 @@ async fn torrserver_stop(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<Value, String> {
-    let torr = state.torrserver.clone();
-
-    match tauri::async_runtime::spawn_blocking(move || {
-        let mut torr = torr.lock().expect("torrserver poisoned");
-        torr.stop(&app)
-    })
-    .await
-    {
-        Ok(v) => Ok(v),
-        Err(err) => Ok(json!({ "success": false, "message": format!("Join error: {err}") })),
-    }
+    with_torrserver(state, move |torr, _| torr.stop(&app)).await
 }
 
 #[tauri::command]
@@ -894,19 +891,8 @@ async fn torrserver_restart(
     state: tauri::State<'_, AppState>,
     args: Option<Vec<String>>,
 ) -> Result<Value, String> {
-    let store = state.store.clone();
-    let torr = state.torrserver.clone();
     let args = args.unwrap_or_default();
-
-    match tauri::async_runtime::spawn_blocking(move || {
-        let mut torr = torr.lock().expect("torrserver poisoned");
-        torr.restart(&app, &store, args)
-    })
-    .await
-    {
-        Ok(v) => Ok(v),
-        Err(err) => Ok(json!({ "success": false, "message": format!("Join error: {err}") })),
-    }
+    with_torrserver(state, move |torr, store| torr.restart(&app, store, args)).await
 }
 
 #[tauri::command]
@@ -914,18 +900,7 @@ async fn torrserver_status(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<Value, String> {
-    let store = state.store.clone();
-    let torr = state.torrserver.clone();
-
-    match tauri::async_runtime::spawn_blocking(move || {
-        let mut torr = torr.lock().expect("torrserver poisoned");
-        torr.status(&app, &store)
-    })
-    .await
-    {
-        Ok(v) => Ok(v),
-        Err(err) => Ok(json!({ "success": false, "message": format!("Join error: {err}") })),
-    }
+    with_torrserver(state, move |torr, store| torr.status(&app, store)).await
 }
 
 #[tauri::command]
@@ -934,34 +909,22 @@ async fn torrserver_download(
     state: tauri::State<'_, AppState>,
     version: Option<String>,
 ) -> Result<Value, String> {
-    let store = state.store.clone();
-    let torr = state.torrserver.clone();
-
-    match tauri::async_runtime::spawn_blocking(move || {
-        let mut torr = torr.lock().expect("torrserver poisoned");
-        torr.download(&app, &store, version)
+    with_torrserver(state, move |torr, store| {
+        torr.download(&app, store, version)
     })
     .await
-    {
-        Ok(v) => Ok(v),
-        Err(err) => Ok(json!({ "success": false, "message": format!("Join error: {err}") })),
-    }
 }
 
 #[tauri::command]
 async fn torrserver_check_update(state: tauri::State<'_, AppState>) -> Result<Value, String> {
-    let store = state.store.clone();
-    let torr = state.torrserver.clone();
+    let result = with_torrserver(state, |torr, store| torr.check_for_update(store)).await?;
 
-    match tauri::async_runtime::spawn_blocking(move || {
-        let mut torr = torr.lock().expect("torrserver poisoned");
-        torr.check_for_update(&store)
-    })
-    .await
-    {
-        Ok(v) => Ok(v),
-        Err(err) => Ok(json!({ "hasUpdate": false, "message": format!("Join error: {err}") })),
+    // Ошибка join для этой команды исторически отдаётся в поле hasUpdate.
+    if result.get("hasUpdate").is_none() {
+        return Ok(json!({ "hasUpdate": false, "message": result.get("message").cloned() }));
     }
+
+    Ok(result)
 }
 
 #[tauri::command]
@@ -969,18 +932,7 @@ async fn torrserver_update(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<Value, String> {
-    let store = state.store.clone();
-    let torr = state.torrserver.clone();
-
-    match tauri::async_runtime::spawn_blocking(move || {
-        let mut torr = torr.lock().expect("torrserver poisoned");
-        torr.update(&app, &store)
-    })
-    .await
-    {
-        Ok(v) => Ok(v),
-        Err(err) => Ok(json!({ "success": false, "message": format!("Join error: {err}") })),
-    }
+    with_torrserver(state, move |torr, store| torr.update(&app, store)).await
 }
 
 #[tauri::command]
@@ -989,19 +941,11 @@ async fn torrserver_uninstall(
     state: tauri::State<'_, AppState>,
     keep_data: Option<bool>,
 ) -> Result<Value, String> {
-    let store = state.store.clone();
-    let torr = state.torrserver.clone();
     let keep_data = keep_data.unwrap_or(false);
-
-    match tauri::async_runtime::spawn_blocking(move || {
-        let mut torr = torr.lock().expect("torrserver poisoned");
-        torr.uninstall(&app, &store, keep_data)
+    with_torrserver(state, move |torr, store| {
+        torr.uninstall(&app, store, keep_data)
     })
     .await
-    {
-        Ok(v) => Ok(v),
-        Err(err) => Ok(json!({ "success": false, "message": format!("Join error: {err}") })),
-    }
 }
 
 #[tauri::command]
@@ -1009,18 +953,7 @@ async fn torrserver_is_installed(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<Value, String> {
-    let store = state.store.clone();
-    let torr = state.torrserver.clone();
-
-    match tauri::async_runtime::spawn_blocking(move || {
-        let torr = torr.lock().expect("torrserver poisoned");
-        torr.is_installed(&app, &store)
-    })
-    .await
-    {
-        Ok(v) => Ok(v),
-        Err(err) => Ok(json!({ "success": false, "message": format!("Join error: {err}") })),
-    }
+    with_torrserver(state, move |torr, store| torr.is_installed(&app, store)).await
 }
 
 fn is_local_page(url: &tauri::Url) -> bool {
@@ -1100,22 +1033,75 @@ fn normalize_window_size(width: u64, height: u64) -> (u32, u32) {
     )
 }
 
-fn save_window_state(window: &tauri::WebviewWindow, state: &tauri::State<'_, AppState>) {
-    let position = window.outer_position();
-    let size = window.outer_size();
-    if let (Ok(pos), Ok(sz)) = (position, size) {
-        let (width, height) = normalize_window_size(sz.width as u64, sz.height as u64);
-        let mut store = state.store.lock().expect("store poisoned");
-        let _ = store.set(
-            "windowState".into(),
-            json!({
-                "x": pos.x,
-                "y": pos.y,
-                "width": width,
-                "height": height
-            }),
-        );
+/// Пауза между последним событием окна и записью store.json. Без неё каждое
+/// событие Moved/Resized (десятки в секунду при перетаскивании) делало
+/// полную запись с fsync и держало мьютекс стора на главном потоке.
+const WINDOW_STATE_SAVE_DELAY: Duration = Duration::from_millis(500);
+
+fn current_window_rect(window: &tauri::WebviewWindow) -> Option<Rect> {
+    let pos = window.outer_position().ok()?;
+    let size = window.outer_size().ok()?;
+    let (width, height) = normalize_window_size(size.width as u64, size.height as u64);
+    Some((pos.x, pos.y, width, height))
+}
+
+/// Пишет накопленное состояние окна на диск, если оно есть.
+fn flush_window_state(state: &AppState) {
+    let pending = state
+        .pending_window_state
+        .lock()
+        .expect("pending_window_state poisoned")
+        .take();
+
+    let Some((x, y, width, height)) = pending else {
+        return;
+    };
+
+    let mut store = state.store.lock().expect("store poisoned");
+    let _ = store.set(
+        "windowState".into(),
+        json!({ "x": x, "y": y, "width": width, "height": height }),
+    );
+}
+
+/// Запоминает положение окна в памяти и планирует отложенную запись.
+/// Каждое новое событие сдвигает запись; на диск попадает только последнее.
+fn schedule_window_state_save(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
+    let Some(rect) = current_window_rect(window) else {
+        return;
+    };
+
+    let state = app.state::<AppState>();
+    *state
+        .pending_window_state
+        .lock()
+        .expect("pending_window_state poisoned") = Some(rect);
+
+    let generation = state.window_state_generation.fetch_add(1, Ordering::SeqCst) + 1;
+    let handle = app.clone();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        std::thread::sleep(WINDOW_STATE_SAVE_DELAY);
+
+        let state = handle.state::<AppState>();
+        if state.window_state_generation.load(Ordering::SeqCst) == generation {
+            flush_window_state(&state);
+        }
+    });
+}
+
+/// Синхронная запись перед закрытием: откладывать уже некуда.
+fn save_window_state_now(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
+    let state = app.state::<AppState>();
+
+    if let Some(rect) = current_window_rect(window) {
+        *state
+            .pending_window_state
+            .lock()
+            .expect("pending_window_state poisoned") = Some(rect);
     }
+
+    flush_window_state(&state);
 }
 
 fn apply_initial_window_state(
@@ -1160,7 +1146,9 @@ fn apply_initial_window_state(
     };
 
     let (width, height) = normalize_window_size(w, h);
-    let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(width, height)));
+    let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(
+        width, height,
+    )));
 
     // available_monitors() сам просит главный поток и ждёт ответа, поэтому
     // вызывать его из setup (и вообще из главного потока) нельзя — будет дедлок.
@@ -1205,7 +1193,12 @@ fn warn_about_proxy(window: &tauri::Webview, state: &tauri::State<'_, AppState>)
             return;
         }
 
-        let Some(message) = state.proxy_error.lock().expect("proxy_error poisoned").clone() else {
+        let Some(message) = state
+            .proxy_error
+            .lock()
+            .expect("proxy_error poisoned")
+            .clone()
+        else {
             return;
         };
 
@@ -1371,7 +1364,7 @@ pub fn run() {
             let _ = (app, event);
         })
         .setup(|app| {
-            let path = store_path(&app.handle())?;
+            let path = store_path(app.handle())?;
             let store = store::AppStore::load(path);
 
             let mut proxy = proxy::ProxyServerManager::new();
@@ -1383,11 +1376,13 @@ pub fn run() {
 
             app.manage(AppState {
                 store: Arc::new(Mutex::new(store)),
-                torrserver: Arc::new(Mutex::new(torrserver::TorrServerManager::new())),
+                torrserver: Arc::new(torrserver::TorrServerManager::new()),
                 proxy: Arc::new(Mutex::new(proxy)),
                 autostart_done: Arc::new(Mutex::new(false)),
                 proxy_error: Arc::new(Mutex::new(proxy_error)),
                 proxy_warned: Arc::new(Mutex::new(false)),
+                pending_window_state: Arc::new(Mutex::new(None)),
+                window_state_generation: Arc::new(AtomicU64::new(0)),
             });
 
             let window = app
@@ -1411,17 +1406,18 @@ pub fn run() {
 
             let app_handle_for_events = app.handle().clone();
             window.on_window_event(move |event| {
-                if let Some(main_window) = app_handle_for_events.get_webview_window("main") {
-                    let state = app_handle_for_events.state::<AppState>();
+                let Some(main_window) = app_handle_for_events.get_webview_window("main") else {
+                    return;
+                };
 
-                    match event {
-                        WindowEvent::Moved(_)
-                        | WindowEvent::Resized(_)
-                        | WindowEvent::CloseRequested { .. } => {
-                            save_window_state(&main_window, &state);
-                        }
-                        _ => {}
+                match event {
+                    WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
+                        schedule_window_state_save(&app_handle_for_events, &main_window);
                     }
+                    WindowEvent::CloseRequested { .. } => {
+                        save_window_state_now(&app_handle_for_events, &main_window);
+                    }
+                    _ => {}
                 }
             });
 
@@ -1474,8 +1470,7 @@ pub fn run() {
                 let torr_state = state.torrserver.clone();
 
                 tauri::async_runtime::spawn_blocking(move || {
-                    let mut torr = torr_state.lock().expect("torrserver poisoned");
-                    let result = torr.start(&app_handle, &store_state, Vec::new());
+                    let result = torr_state.start(&app_handle, &store_state, Vec::new());
                     let success = result
                         .get("success")
                         .and_then(|v| v.as_bool())
@@ -1529,8 +1524,15 @@ pub fn run() {
             torrserver_uninstall,
             torrserver_is_installed
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // Cmd+Q на macOS и закрытие через single-instance не всегда проходят
+            // через CloseRequested, поэтому отложенную запись досылаем здесь.
+            if let RunEvent::ExitRequested { .. } = event {
+                flush_window_state(&app.state::<AppState>());
+            }
+        });
 }
 
 #[cfg(test)]
@@ -1541,14 +1543,20 @@ mod mirror_tests {
     fn normalizes_user_input_into_url() {
         assert_eq!(normalize_mirror_url("prisma.ws"), "http://prisma.ws");
         assert_eq!(normalize_mirror_url("  prisma.ws/  "), "http://prisma.ws");
-        assert_eq!(normalize_mirror_url("https://mirror.tld/"), "https://mirror.tld");
+        assert_eq!(
+            normalize_mirror_url("https://mirror.tld/"),
+            "https://mirror.tld"
+        );
         assert_eq!(normalize_mirror_url("   "), DEFAULT_PRISMA_URL);
     }
 
     #[test]
     fn sanitize_falls_back_to_default_on_empty_input() {
         assert_eq!(sanitize_prisma_url("   "), DEFAULT_PRISMA_URL);
-        assert_eq!(sanitize_prisma_url(" http://mirror.tld "), "http://mirror.tld");
+        assert_eq!(
+            sanitize_prisma_url(" http://mirror.tld "),
+            "http://mirror.tld"
+        );
     }
 
     #[test]
@@ -1587,7 +1595,10 @@ mod window_state_tests {
     fn rejects_position_on_a_disconnected_monitor() {
         // Окно осталось на втором мониторе, которого больше нет.
         assert!(!window_is_on_screen((2100, 200, 1000, 700), &[LAPTOP]));
-        assert!(window_is_on_screen((2100, 200, 1000, 700), &[LAPTOP, SECOND_MONITOR]));
+        assert!(window_is_on_screen(
+            (2100, 200, 1000, 700),
+            &[LAPTOP, SECOND_MONITOR]
+        ));
     }
 
     #[test]
@@ -1596,7 +1607,6 @@ mod window_state_tests {
         assert!(!window_is_on_screen((100, 100, 0, 0), &[LAPTOP]));
         assert!(!window_is_on_screen((100, 100, 1000, 700), &[]));
     }
-
 
     #[test]
     fn repairs_regression_size_that_made_the_window_invisible() {

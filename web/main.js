@@ -1,3 +1,10 @@
+// Prisma Desktop — десктопный клиент Prisma на Tauri.
+// Copyright (C) 2026 Sheinices
+//
+// SPDX-License-Identifier: AGPL-3.0-only
+// This file is part of Prisma Desktop, licensed under the GNU Affero General
+// Public License v3.0. See the LICENSE file in the project root for details.
+
 const { invoke } = window.__TAURI__.core;
 
 const splash = document.querySelector("#splash");
@@ -131,16 +138,23 @@ async function boot() {
   }
 
   // Сохранённый адрес, затем ранее рабочие зеркала — первое живое открываем сами.
+  // Проверки запускаем все сразу, а результаты разбираем в порядке приоритета:
+  // если основной адрес жив, ждать ответа остальных не нужно, а если лежит —
+  // не тратим на каждый кандидат полный таймаут по очереди.
   const candidates = [url, ...history.filter((item) => item !== url)];
-  let lastMessage = "";
-
-  for (const candidate of candidates) {
-    splashText.textContent = `Проверяем ${candidate}…`;
-
-    const result = await invoke("mirror_check", { url: candidate }).catch((error) => ({
+  const checks = candidates.map((candidate) =>
+    invoke("mirror_check", { url: candidate }).catch((error) => ({
       ok: false,
       message: String(error),
-    }));
+    })),
+  );
+  let lastMessage = "";
+
+  for (let i = 0; i < candidates.length; i += 1) {
+    const candidate = candidates[i];
+    splashText.textContent = `Проверяем ${candidate}…`;
+
+    const result = await checks[i];
 
     if (!result.ok) {
       lastMessage = result.message || "Зеркало недоступно";
