@@ -33,7 +33,7 @@ const code =
   slice("  function externalPlayerPathLooksPotPlayer(path) {", "\n  function externalTimelineHash") +
   slice("  function patchPlayerExternalLaunch() {", "\n  async function initAppAutoUpdate");
 
-function run({ player, playerPath, torrent = true }) {
+function run({ player, playerPath, torrent = true, fsExists = true }) {
   const calls = [];
 
   const storage = {
@@ -73,11 +73,13 @@ function run({ player, playerPath, torrent = true }) {
       },
       external: { open: (url) => calls.push({ target: "external-url", url }) },
     },
-    require: () => ({
-      spawn: (cmd, args) => calls.push({ target: "spawn", cmd, args }),
-    }),
+    require: (module) =>
+      module === "fs"
+        ? { existsSync: () => fsExists }
+        : { spawn: (cmd, args) => calls.push({ target: "spawn", cmd, args }) },
     addEventListener() {},
   };
+  context.Prisma.Noty = { show() {} };
   context.Prisma.Player.__desktopPatched = false;
 
   vm.createContext(context);
@@ -98,6 +100,8 @@ const cases = [
   { name: "\"Другой плеер\" без пути — падаем во встроенный", args: { player: "other", playerPath: "" }, expect: "inner" },
   { name: "плеер не выбран — встроенный", args: { player: null, playerPath: "" }, expect: "inner" },
   { name: "выбран VLC с путём — прямой запуск", args: { player: "vlc", playerPath: VLC }, expect: "spawn" },
+  { name: "путь к VLC остался, а бинарник удалён — встроенный", args: { player: "vlc", playerPath: VLC, fsExists: false }, expect: "inner" },
+  { name: "\"Другой плеер\", бинарник удалён — встроенный", args: { player: "other", playerPath: VLC, fsExists: false }, expect: "inner" },
   { name: "ярлык \"vlc\", а бинарник PotPlayer — таймкоды всё равно читаются", args: { player: "vlc", playerPath: POT }, expect: "potplayer" },
   { name: "ярлык \"other\", а бинарник PotPlayer — таймкоды читаются", args: { player: "other", playerPath: POT }, expect: "potplayer" },
   { name: "путь с пробелами по краям распознаётся", args: { player: "other", playerPath: `  ${POT} ` }, expect: "potplayer" },

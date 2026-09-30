@@ -1292,19 +1292,41 @@ fn initialize_prisma_defaults(window: &tauri::Webview, state: &tauri::State<'_, 
       if (preferredPath) localStorage.setItem("player_nw_path", preferredPath);
     }}
 
+    const PLAYER_KEYS = ["player", "player_torrent", "player_iptv"];
+    const EXTERNAL_IDS = ["other", "vlc"];
+
     // По умолчанию в десктопе играем встроенным плеером. Раньше здесь
     // автоматически включался найденный PotPlayer или VLC, из-за чего
     // приложение решало за пользователя.
-    ["player", "player_torrent"].forEach((key) => {{
+    PLAYER_KEYS.forEach((key) => {{
       if (localStorage.getItem(key) === null) localStorage.setItem(key, "inner");
     }});
 
+    const fallbackToInner = (reason) => {{
+      PLAYER_KEYS.forEach((key) => {{
+        if (EXTERNAL_IDS.includes(localStorage.getItem(key))) {{
+          localStorage.setItem(key, "inner");
+          if (window.Prisma && Prisma.Storage) Prisma.Storage.set(key, "inner");
+        }}
+      }});
+      console.warn("Prisma desktop: external player unavailable (" + reason + "), using inner player");
+    }};
+
     // Чиним поломанную комбинацию из старых версий: "внешний плеер" без пути,
     // при которой сайт ждёт внешний запуск и не включает встроенный.
-    if (!localStorage.getItem("player_nw_path")) {{
-      ["player", "player_torrent"].forEach((key) => {{
-        if (localStorage.getItem(key) === "other") localStorage.setItem(key, "inner");
-      }});
+    const savedPath = localStorage.getItem("player_nw_path");
+    if (!savedPath) {{
+      fallbackToInner("no path");
+    }} else if (window.__TAURI__ && window.__TAURI__.core) {{
+      // Путь может остаться от удалённого плеера (например, VLC снесли):
+      // тогда запуск уходил в несуществующий бинарник, а встроенный не включался.
+      window.__TAURI__.core.invoke("fs_exists_sync", {{ path: savedPath }})
+        .then((exists) => {{
+          if (exists) return;
+          localStorage.removeItem("player_nw_path");
+          fallbackToInner("missing binary: " + savedPath);
+        }})
+        .catch(() => {{}});
     }}
   }} catch (e) {{
     console.warn("Prisma defaults init failed", e);
@@ -1338,7 +1360,29 @@ fn build_app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tau
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// WebKitGTK с проприетарным драйвером NVIDIA и рендерером DMA-BUF часто даёт
+/// белое окно или падение при старте. Отключаем DMA-BUF только там, где есть
+/// драйвер NVIDIA, и только если пользователь не задал переменную сам.
+#[cfg(target_os = "linux")]
+fn apply_linux_webkit_workarounds() {
+    const DMABUF_VAR: &str = "WEBKIT_DISABLE_DMABUF_RENDERER";
+
+    let nvidia_driver = std::path::Path::new("/proc/driver/nvidia/version").exists();
+
+    if nvidia_driver && std::env::var_os(DMABUF_VAR).is_none() {
+        std::env::set_var(DMABUF_VAR, "1");
+    }
+}
+
 pub fn run() {
+    // Переменные окружения WebKit читаются при создании первого webview,
+    // поэтому выставляем их до сборки приложения.
+    #[cfg(target_os = "linux")]
+    apply_linux_webkit_workarounds();
+
+    // До первого HTTPS-запроса из любого места: наш клиент, updater, прокси.
+    http::install_crypto_provider();
+
     let builder = tauri::Builder::default();
 
     #[cfg(target_os = "macos")]
@@ -1527,10 +1571,14 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
-            // Cmd+Q на macOS и закрытие через single-instance не всегда проходят
-            // через CloseRequested, поэтому отложенную запись досылаем здесь.
+            // Cmd+Q на macOS и закрытие окна крестиком не проходят через команду
+            // close_app, поэтому здесь досылаем отложенную запись окна и гасим
+            // дочерний TorrServer с прокси: иначе сервер оставался сиротой.
             if let RunEvent::ExitRequested { .. } = event {
-                flush_window_state(&app.state::<AppState>());
+                let state = app.state::<AppState>();
+                flush_window_state(&state);
+                let _ = state.torrserver.stop(app);
+                state.proxy.lock().expect("proxy poisoned").stop();
             }
         });
 }

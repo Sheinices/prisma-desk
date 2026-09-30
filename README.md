@@ -157,6 +157,26 @@ TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" \
 - Linux: `.AppImage`, `.deb`, `.rpm`
 - Windows: `.msi`, `.exe` (NSIS), `Prisma-portable-x64.zip`
 
+## Linux: совместимость и известные проблемы
+
+Релизы собираются в контейнере Ubuntu 22.04, поэтому бинарник требует glibc 2.35+
+и WebKitGTK 4.1: Ubuntu 22.04+, Debian 12+, Fedora 36+, openSUSE Leap 15.5+, Arch.
+На более старых дистрибутивах (Ubuntu 20.04, Debian 11) пакет не установится, а
+AppImage не запустится — там нет `libwebkit2gtk-4.1`.
+
+- **AppImage не запускается, ошибка про `libfuse.so.2`.** Установите `libfuse2`
+  (`sudo apt install libfuse2`, на Fedora `fuse`) или запустите без FUSE:
+  `./Prisma.AppImage --appimage-extract-and-run`.
+- **Белое окно или падение при старте на NVIDIA.** Приложение само отключает
+  DMA-BUF рендерер WebKit, если найден проприетарный драйвер. Если не помогло:
+  `WEBKIT_DISABLE_COMPOSITING_MODE=1 ./Prisma.AppImage`.
+- **Проблемы на Wayland** (чёрное окно, не работает fullscreen):
+  `GDK_BACKEND=x11 ./Prisma.AppImage`.
+- **Встроенный плеер не воспроизводит видео.** AppImage везёт кодеки GStreamer
+  с собой. Для `.deb`/`.rpm` они идут в Recommends: `gstreamer1.0-plugins-good`,
+  `gstreamer1.0-plugins-bad`, `gstreamer1.0-libav` (Fedora: `gstreamer1-plugins-good`,
+  `gstreamer1-plugins-bad-free`, `gstreamer1-libav` из RPM Fusion).
+
 ## Конфигурация
 
 ### Prisma URL

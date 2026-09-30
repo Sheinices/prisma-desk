@@ -8,9 +8,9 @@
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
@@ -21,7 +21,9 @@ use crate::services::{http, store};
 
 const GITHUB_API: &str = "https://api.github.com/repos/YouROK/TorrServer/releases/latest";
 const API_TIMEOUT: Duration = Duration::from_secs(40);
-const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(40);
+/// Общий предел на скачивание бинарника (~60 МБ). Раньше было 40 секунд, и на
+/// канале медленнее ~1,5 МБ/с загрузка обрывалась по таймауту.
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600);
 const DEFAULT_PORT: u16 = 8090;
 
 /// Сколько ждём после spawn, чтобы отличить нормальный старт от мгновенного падения.
@@ -124,6 +126,18 @@ fn read_ts_port(store: &Store) -> u16 {
 fn store_string(store: &Store, key: &str) -> Option<String> {
     let guard = store.lock().expect("store poisoned");
     guard.get(key).and_then(|v| v.as_str().map(str::to_string))
+}
+
+/// Путь из `tsPath` годится, только если это бинарник для текущей платформы.
+/// Иначе после запуска x86_64-сборки на Apple Silicon store помнит amd64-файл,
+/// и без Rosetta старт падает с «Bad CPU type in executable», хотя рядом
+/// лежит нативный файл.
+fn saved_executable_matches_platform(saved: &Path, exe_name: &str) -> bool {
+    saved
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.eq_ignore_ascii_case(exe_name))
+        .unwrap_or(false)
 }
 
 fn success_of(result: &Value) -> bool {
@@ -457,7 +471,7 @@ impl TorrServerManager {
         let mut executable_path = info.save_path.clone();
         if let Some(saved_path) = store_string(store, "tsPath") {
             let candidate = PathBuf::from(saved_path);
-            if candidate.exists() {
+            if candidate.exists() && saved_executable_matches_platform(&candidate, &info.exe_name) {
                 executable_path = candidate;
             }
         }
@@ -544,8 +558,15 @@ impl TorrServerManager {
             }
             Ok(None) => {
                 inner.status = Status::Running;
-                inner.executable_path = Some(executable_path);
+                inner.executable_path = Some(executable_path.clone());
                 drop(inner);
+
+                // Store мог помнить бинарник другой платформы — записываем тот, что реально запустился.
+                let executable_str = executable_path.to_string_lossy().to_string();
+                if store_string(store, "tsPath").as_deref() != Some(executable_str.as_str()) {
+                    let mut guard = store.lock().expect("store poisoned");
+                    let _ = guard.set("tsPath".into(), Value::String(executable_str));
+                }
 
                 emit_torr_output(app, "status", json!({ "message": "started", "pid": pid }));
 
@@ -668,11 +689,24 @@ impl TorrServerManager {
         // полубитый бинарник, а работающий exe на Windows не будет обрезан.
         let tmp_path = info.save_dir.join(format!("{}.part", info.exe_name));
 
+        let total = response.content_length();
+        emit_torr_output(
+            app,
+            "download",
+            json!({ "phase": "start", "version": target_version, "total": total }),
+        );
+
         let written = File::create(&tmp_path)
             .map_err(|err| format!("Не удалось создать файл: {err}"))
             .and_then(|mut file| {
-                std::io::copy(&mut response, &mut file)
-                    .map_err(|err| format!("Ошибка записи файла: {err}"))
+                copy_with_progress(&mut response, &mut file, |received| {
+                    emit_torr_output(
+                        app,
+                        "download",
+                        json!({ "phase": "progress", "received": received, "total": total }),
+                    );
+                })
+                .map_err(|err| format!("Ошибка записи файла: {err}"))
             });
 
         if let Err(message) = written {
@@ -718,6 +752,36 @@ impl TorrServerManager {
             "version": target_version
         })
     }
+}
+
+/// Как `std::io::copy`, но раз в ~1 МБ сообщает, сколько уже получено.
+fn copy_with_progress(
+    reader: &mut impl Read,
+    writer: &mut impl Write,
+    mut on_progress: impl FnMut(u64),
+) -> std::io::Result<u64> {
+    const REPORT_EVERY: u64 = 1024 * 1024;
+
+    let mut buf = [0u8; 64 * 1024];
+    let mut received: u64 = 0;
+    let mut last_report: u64 = 0;
+
+    loop {
+        let n = reader.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        writer.write_all(&buf[..n])?;
+        received += n as u64;
+
+        if received - last_report >= REPORT_EVERY {
+            last_report = received;
+            on_progress(received);
+        }
+    }
+
+    on_progress(received);
+    Ok(received)
 }
 
 fn ensure_directories(info: &PlatformInfo) -> Result<(), String> {
@@ -816,6 +880,38 @@ mod tests {
         drop(guard);
         assert_eq!(manager.current_busy(), None);
         assert!(manager.acquire_busy("start").is_ok());
+    }
+
+    #[test]
+    fn saved_path_is_used_only_for_the_current_platform_binary() {
+        let exe = "TorrServer-darwin-arm64";
+        assert!(saved_executable_matches_platform(
+            Path::new("/data/torrserver/TorrServer-darwin-arm64"),
+            exe
+        ));
+        assert!(!saved_executable_matches_platform(
+            Path::new("/data/torrserver/TorrServer-darwin-amd64"),
+            exe
+        ));
+        assert!(!saved_executable_matches_platform(
+            Path::new("/data/torrserver"),
+            exe
+        ));
+    }
+
+    #[test]
+    fn copy_with_progress_reports_and_copies_everything() {
+        let data = vec![7u8; 3 * 1024 * 1024 + 123];
+        let mut out = Vec::new();
+        let mut reports = Vec::new();
+
+        let copied =
+            copy_with_progress(&mut data.as_slice(), &mut out, |n| reports.push(n)).unwrap();
+
+        assert_eq!(copied, data.len() as u64);
+        assert_eq!(out, data);
+        assert_eq!(reports.last().copied(), Some(data.len() as u64));
+        assert!(reports.len() >= 3);
     }
 
     #[test]

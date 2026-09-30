@@ -1059,29 +1059,11 @@
               return;
             }
 
-            if (status.installed) {
-              Prisma.Loading.start(
-                () => {},
-                Prisma.Lang.translate("app_settings_ts_start_loading"),
-              );
-            } else {
-              Prisma.Loading.start(
-                () => {},
-                Prisma.Lang.translate("app_settings_ts_download_loading"),
-              );
-            }
-
-            const tsPort = normalizeTsPort(await window.desktopAPI.store.get("tsPort"));
-            const result = await window.desktopAPI.torrServer.start([]);
-            if (result && result.success) syncTorrServerRuntime(tsPort);
-
-            updateTsStatus();
-
-            Prisma.Loading.stop();
-            Prisma.Noty.show(
-              result.success
-                ? result.message
-                : `${Prisma.Lang.translate("app_error")}: ${result.message}`,
+            await runTsOperation(
+              status.installed
+                ? "app_settings_ts_start_loading"
+                : "app_settings_ts_download_loading",
+              () => window.desktopAPI.torrServer.start([]),
             );
           },
         })
@@ -1096,17 +1078,8 @@
             name: Prisma.Lang.translate("app_settings_ts_stop_name"),
           },
           onChange: async () => {
-            Prisma.Loading.start(
-              () => {},
-              Prisma.Lang.translate("app_settings_ts_stop_loading"),
-            );
-            const result = await window.desktopAPI.torrServer.stop();
-            Prisma.Loading.stop();
-            updateTsStatus();
-            Prisma.Noty.show(
-              result.success
-                ? result.message
-                : `${Prisma.Lang.translate("app_error")}: ${result.message}`,
+            await runTsOperation("app_settings_ts_stop_loading", () =>
+              window.desktopAPI.torrServer.stop(),
             );
           },
         })
@@ -1121,21 +1094,8 @@
             name: Prisma.Lang.translate("app_settings_ts_restart_name"),
           },
           onChange: async () => {
-            Prisma.Loading.start(
-              () => {},
-              Prisma.Lang.translate("app_settings_ts_restart_loading"),
-            );
-
-            const tsPort = normalizeTsPort(await window.desktopAPI.store.get("tsPort"));
-            const result = await window.desktopAPI.torrServer.restart([]);
-            if (result && result.success) syncTorrServerRuntime(tsPort);
-
-            updateTsStatus();
-            Prisma.Loading.stop();
-            Prisma.Noty.show(
-              result.success
-                ? result.message
-                : `${Prisma.Lang.translate("app_error")}: ${result.message}`,
+            await runTsOperation("app_settings_ts_restart_loading", () =>
+              window.desktopAPI.torrServer.restart([]),
             );
           },
         })
@@ -1355,6 +1315,61 @@
         })
         .apply();
     });
+
+    // Оверлей Prisma.Loading должен побыть на экране хотя бы немного:
+    // при stop() сразу после start() он оставался висеть и перекрывал клиент.
+    const TS_LOADING_MIN_VISIBLE_MS = 400;
+    const TS_BUSY_POLL_MS = 1000;
+    const TS_BUSY_WAIT_LIMIT_MS = 15 * 60 * 1000;
+
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    // Бэкенд отвечает «занят», если операцию уже выполняет автозапуск или другая
+    // кнопка. Вместо мгновенной ошибки ждём, пока она закончится, и отдаём
+    // фактическое состояние сервера.
+    async function waitForTsIdle() {
+      const startedAt = Date.now();
+      let status = null;
+
+      while (Date.now() - startedAt < TS_BUSY_WAIT_LIMIT_MS) {
+        await sleep(TS_BUSY_POLL_MS);
+        status = await window.desktopAPI.torrServer.getStatus();
+        if (!status || !status.busy) break;
+      }
+
+      const running = Boolean(status && status.running);
+      return {
+        success: running,
+        message: running
+          ? Prisma.Lang.translate("app_settings_ts_status_installed_running")
+          : Prisma.Lang.translate("app_settings_ts_status_installed_stopped"),
+      };
+    }
+
+    async function runTsOperation(loadingKey, operation) {
+      const shownAt = Date.now();
+      Prisma.Loading.start(() => {}, Prisma.Lang.translate(loadingKey));
+
+      let result = null;
+      try {
+        const tsPort = normalizeTsPort(await window.desktopAPI.store.get("tsPort"));
+        result = await operation();
+        if (result && result.busy) result = await waitForTsIdle();
+        if (result && result.success) syncTorrServerRuntime(tsPort);
+      } catch (error) {
+        result = { success: false, message: String(error) };
+      } finally {
+        const elapsed = Date.now() - shownAt;
+        if (elapsed < TS_LOADING_MIN_VISIBLE_MS) await sleep(TS_LOADING_MIN_VISIBLE_MS - elapsed);
+        Prisma.Loading.stop();
+      }
+
+      updateTsStatus();
+      const message = result && result.message ? result.message : Prisma.Lang.translate("app_error");
+      Prisma.Noty.show(
+        result && result.success ? message : `${Prisma.Lang.translate("app_error")}: ${message}`,
+      );
+    }
 
     let tsStatusPollTimer = null;
 
@@ -2843,14 +2858,40 @@
       if (useDirectSpawn) {
         if (!playerPath) return false;
 
-        try {
-          const spawn = window.require("child_process").spawn;
-          spawn(playerPath, [encodeURI(safeUrl)]);
-          return true;
-        } catch (error) {
-          console.warn("APP external player spawn failed", error);
+        const launch = () => {
+          try {
+            const spawn = window.require("child_process").spawn;
+            spawn(playerPath, [encodeURI(safeUrl)]);
+            return true;
+          } catch (error) {
+            console.warn("APP external player spawn failed", error);
+            return false;
+          }
+        };
+
+        // Бинарник могли удалить после настройки (типичный случай — VLC).
+        // Тогда честно уходим во встроенный плеер вместо тихого провала.
+        const missing = () => {
+          console.warn("APP external player binary not found", playerPath);
+          if (Prisma.Noty && Prisma.Noty.show) {
+            Prisma.Noty.show("Внешний плеер не найден: " + playerPath + ". Открываю встроенный.");
+          }
           return false;
+        };
+
+        let exists = true;
+        try {
+          const fs = window.require("fs");
+          if (fs && typeof fs.existsSync === "function") exists = fs.existsSync(playerPath);
+        } catch {
+          exists = true;
         }
+
+        if (exists && typeof exists.then === "function") {
+          return exists.then((ok) => (ok ? launch() : missing())).catch(() => launch());
+        }
+
+        return exists ? launch() : missing();
       }
 
       const externalUrl = buildExternalUrl(player, data);
@@ -3041,6 +3082,11 @@
       } else if (result && result.message) {
         window.__ts_autostart_last = "failed: " + result.message;
         console.warn("APP TorrServer autostart failed:", result.message);
+        // Раньше ошибка оседала только в консоли, и пользователь видел
+        // просто «TorrServer не запущен» без объяснения.
+        if (!result.busy) {
+          Prisma.Noty.show("TorrServer не запустился: " + result.message);
+        }
       }
     } catch (error) {
       console.warn("APP TorrServer autostart exception:", error);

@@ -39,20 +39,31 @@ jobs:
             target: x86_64-pc-windows-msvc
 
     runs-on: ${{ matrix.platform }}
+    # Linux — в контейнере Ubuntu 22.04 ради старого glibc, подробности в main.yml.
+    container: ${{ matrix.platform == 'ubuntu-24.04' && 'ubuntu:22.04' || '' }}
+    env:
+      APPIMAGE_EXTRACT_AND_RUN: "1"
 
     steps:
-      - uses: actions/checkout@v4
-
       - name: Install Linux deps
         if: matrix.platform == 'ubuntu-24.04'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          apt-get update
+          apt-get install -y \
+            build-essential curl wget file git pkg-config patchelf \
             libwebkit2gtk-4.1-dev \
             libgtk-3-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
-            patchelf
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-libav \
+            gstreamer1.0-gl
+
+      - uses: actions/checkout@v4
 
       - name: Setup Node
         uses: actions/setup-node@v4

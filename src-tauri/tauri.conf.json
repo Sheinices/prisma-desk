@@ -37,6 +37,25 @@
     ],
     "macOS": {
       "infoPlist": "macos-info.plist"
+    },
+    "linux": {
+      "appimage": {
+        "bundleMediaFramework": true
+      },
+      "deb": {
+        "recommends": [
+          "gstreamer1.0-plugins-good",
+          "gstreamer1.0-plugins-bad",
+          "gstreamer1.0-libav",
+          "gstreamer1.0-gl"
+        ]
+      },
+      "rpm": {
+        "recommends": [
+          "gstreamer1-plugins-good",
+          "gstreamer1-plugins-bad-free"
+        ]
+      }
     }
   },
   "plugins": {

@@ -145,6 +145,9 @@ jobs:
       - name: Version sync
         run: node scripts/sync-version.mjs --check
 
+      - name: Commands ACL
+        run: node scripts/check-commands-acl.mjs
+
       - name: Player dispatch
         run: node scripts/verify-player-dispatch.js
 

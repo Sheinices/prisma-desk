@@ -107,20 +107,36 @@ jobs:
           path: |
             src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app
 
+  # Linux собираем в контейнере Ubuntu 22.04: бинарник линкуется с glibc 2.35
+  # и запускается на Ubuntu 22.04+, Debian 12+, Fedora 36+ и их производных.
+  # Сборка на самом раннере ubuntu-24.04 давала glibc 2.39, и на более старых
+  # дистрибутивах AppImage не стартовал. GStreamer нужен для
+  # bundleMediaFramework: AppImage везёт с собой кодеки для встроенного плеера.
   linux-x64:
     runs-on: ubuntu-24.04
+    container: ubuntu:22.04
+    env:
+      # В контейнере нет FUSE, linuxdeploy и appimagetool распаковывают себя сами.
+      APPIMAGE_EXTRACT_AND_RUN: "1"
     steps:
-      - uses: actions/checkout@v4
-
       - name: Install Linux deps
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          apt-get update
+          apt-get install -y \
+            build-essential curl wget file git pkg-config patchelf \
             libwebkit2gtk-4.1-dev \
             libgtk-3-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
-            patchelf
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-libav \
+            gstreamer1.0-gl
+
+      - uses: actions/checkout@v4
 
       - name: Setup Node
         uses: actions/setup-node@v4
