@@ -36,7 +36,7 @@ jobs:
     name: Rust dependencies (cargo-deny)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # advisories — уязвимости и заброшенные крейты из RustSec,
       # bans — дубликаты и запрещённые крейты, sources — только crates.io.
@@ -50,7 +50,7 @@ jobs:
     name: npm dependencies (npm audit)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -68,7 +68,7 @@ jobs:
     name: Format and license headers
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -90,7 +90,7 @@ jobs:
         os: [ubuntu-24.04, windows-2022, macos-14]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Linux deps
         if: runner.os == 'Linux'
@@ -125,7 +125,7 @@ jobs:
     name: JS scripts
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Node
         uses: actions/setup-node@v4
