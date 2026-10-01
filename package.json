@@ -5,6 +5,7 @@
   "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
+    "prepare:media": "node scripts/prepare-media-tools.mjs",
     "tauri": "tauri",
     "dev": "tauri dev",
     "build": "tauri build",

@@ -13,6 +13,10 @@
     ]
   },
   "permissions": [
+    "allow-media-audio-probe",
+    "allow-media-audio-start",
+    "allow-media-audio-read",
+    "allow-media-audio-stop",
     "core:default",
     "opener:default",
     "updater:default",

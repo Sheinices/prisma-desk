@@ -1,0 +1,99 @@
+<!doctype html>
+<!-- Prisma Desktop — Copyright (C) 2026 Sheinices
+     SPDX-License-Identifier: AGPL-3.0-only -->
+<meta charset="utf-8">
+<title>Prisma isolated media test</title>
+<div id="player"></div>
+<script>
+  const results = [], calls = [], contexts = [], channels = [], notifications = [];
+  const NativeContext = window.AudioContext;
+  // Observe actual Web Audio output, then silence it before the speakers.
+  window.AudioContext = function (options) {
+    const actual = new NativeContext(options);
+    const analyser = actual.createAnalyser(); analyser.fftSize = 2048;
+    const silence = actual.createGain(); silence.gain.value = 0;
+    analyser.connect(silence); silence.connect(actual.destination);
+    contexts.push({ actual, analyser });
+    return new Proxy(actual, { get(target, key) {
+      if (key === "destination") return analyser;
+      if (key === "createBuffer") return (...args) => { channels.push(args[0]); return target.createBuffer(...args); };
+      const value = Reflect.get(target, key, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    } });
+  };
+  window.__TAURI__ = { core: { async invoke(name, args) {
+    calls.push({ name, ...args });
+    const response = await fetch(`/api/${name}`, { method: "POST", body: JSON.stringify(args) });
+    if (!response.ok) throw (await response.json()).message;
+    return name === "media_audio_read" ? response.arrayBuffer() : response.json();
+  } } };
+  let video, tracks;
+  const player = {
+    url(url) {
+      video = document.createElement("video"); video.muted = true;
+      video.src = url; video.playsInline = true; video.volume = 1;
+      document.querySelector("#player").append(video);
+      video.play().catch(() => {});
+    },
+    video: () => video,
+    saveParams: () => ({}),
+    listener: { send(type, data) { if (type === "tracks") tracks = data.tracks; } },
+    destroy() { video.pause(); video.removeAttribute("src"); video.load(); video.remove(); },
+  };
+  window.Prisma = { PlayerVideo: player, Noty: { show: (message) => notifications.push(message) } };
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  function check(condition, message) { if (!condition) throw new Error(message); results.push(message); }
+  async function waitFor(condition, message, timeout = 10000) {
+    const end = Date.now() + timeout;
+    while (Date.now() < end) { if (condition()) return; await sleep(50); }
+    throw new Error(`${message}: ${JSON.stringify({ time: video?.currentTime, paused: video?.paused, ready: video?.readyState, error: video?.error?.code, bridge: window.__prismaMediaAudio.status(), notifications, calls: calls.slice(-8) })}`);
+  }
+  function energy() {
+    const analyser = contexts[0]?.analyser; if (!analyser) return 0;
+    const data = new Float32Array(analyser.fftSize); analyser.getFloatTimeDomainData(data);
+    return Math.sqrt(data.reduce((sum, value) => sum + value * value, 0) / data.length);
+  }
+  function frequency() {
+    const { actual, analyser } = contexts[0];
+    const data = new Float32Array(analyser.frequencyBinCount); analyser.getFloatFrequencyData(data);
+    let maximum = 0; for (let i = 1; i < data.length; i++) if (data[i] > data[maximum]) maximum = i;
+    return maximum * actual.sampleRate / analyser.fftSize;
+  }
+  async function run() {
+    player.url(`${location.origin}/media.mp4`);
+    await waitFor(() => window.__prismaMediaAudio.status().active && tracks?.length === 2, "bridge/track discovery");
+    video.muted = false;
+    await waitFor(() => !video.paused && video.currentTime > 0.3 && energy() > 0.01, "audible PCM graph");
+    check(video.videoWidth === 128, "real video decoded");
+    check(Math.abs(frequency() - 440) < 50, "AC3 decoded to the Web Audio graph");
+    check(Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, "muted").get.call(video), "native audio remains silenced");
+    video.pause(); const position = video.currentTime;
+    await sleep(250);
+    check(Math.abs(video.currentTime - position) < 0.05 && energy() < 0.001, "pause stops both clocks/output");
+    video.currentTime = 4.375;
+    await video.play();
+    await waitFor(() => video.currentTime > 4.5 && energy() > 0.01, "seek/resume audio");
+    check(calls.some((c) => c.name === "media_audio_start" && Math.abs(c.start - 4.375) < 0.15), "seek uses the video timeline");
+    tracks.forEach((track) => { track.enabled = false; track.selected = false; });
+    tracks[1].enabled = true; tracks[1].selected = true;
+    await waitFor(() => window.__prismaMediaAudio.status().codec === "eac3" && channels.includes(6) && Math.abs(frequency() - 880) < 50 && energy() > 0.005, "EAC3 track/5.1 output");
+    check(channels.includes(6), "six PCM channels retained");
+    video.playbackRate = 1.5;
+    await waitFor(() => calls.some((c) => c.name === "media_audio_start" && c.rate === 1.5) && energy() > 0.005 && Math.abs(frequency() - 880) < 50, "speed/pitch");
+    check(Math.abs(frequency() - 880) < 50, "1.5x speed preserves pitch");
+    video.muted = true;
+    await sleep(250);
+    check(energy() < 0.001, "mute silences PCM");
+    video.muted = false;
+    await waitFor(() => energy() > 0.005, "unmute");
+    player.destroy(); await sleep(200);
+    check(contexts[0].actual.state === "closed" && !window.__prismaMediaAudio.status().active, "teardown closes audio output");
+    check(notifications.length === 0, "no playback errors");
+    return { ok: true, results };
+  }
+</script>
+<script src="/media-audio.js"></script>
+<script>
+  run().then((result) => window.webkit.messageHandlers.testResult.postMessage(result))
+    .catch((error) => window.webkit.messageHandlers.testResult.postMessage({ ok: false, error: error.message, results }));
+</script>

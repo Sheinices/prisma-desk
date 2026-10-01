@@ -113,6 +113,9 @@ jobs:
         with:
           workspaces: src-tauri
 
+      - name: Prepare pinned FFmpeg tools
+        run: node scripts/prepare-media-tools.mjs
+
       # Предупреждения clippy считаем ошибками: локально проект чист,
       # и в CI регрессии не должны копиться молча.
       - name: cargo clippy
@@ -120,6 +123,9 @@ jobs:
 
       - name: cargo test
         run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: AC3/EAC3 decoding and seek over HTTP
+        run: cargo test --manifest-path src-tauri/Cargo.toml decodes_ac3_eac3_over_http_and_seeks_without_aac -- --ignored
 
   js:
     name: JS scripts
@@ -153,6 +159,9 @@ jobs:
 
       - name: External progress manager
         run: node scripts/verify-external-progress-manager.js
+
+      - name: FFmpeg audio bridge
+        run: node scripts/verify-media-audio.js
 
   # Итоговый статус для branch protection: одна галочка вместо шести.
   ci-ok:

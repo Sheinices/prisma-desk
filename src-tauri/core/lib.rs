@@ -21,11 +21,12 @@ mod models;
 mod services;
 
 use models::{AppState, ChildProcessSpawnRequest, CommandResult};
-use services::{http, player, proxy, store, torrserver};
+use services::{http, media_audio, player, proxy, store, torrserver};
 
 const BRIDGE_JS: &str = include_str!("../module/bridge.js");
 const PLUGIN_JS: &str = include_str!("../module/client-inject.js");
 const MIRROR_MODAL_JS: &str = include_str!("../module/mirror-modal.js");
+const MEDIA_AUDIO_JS: &str = include_str!("../module/media-audio.js");
 const DEFAULT_PRISMA_URL: &str = "http://prisma.ws";
 #[cfg(target_os = "macos")]
 const MIRROR_MENU_ID: &str = "prisma-mirror";
@@ -112,6 +113,55 @@ fn is_whitelisted_command(cmd: &str, resolved: &str) -> bool {
 #[tauri::command]
 fn get_app_version(app: tauri::AppHandle) -> String {
     app.package_info().version.to_string()
+}
+
+#[tauri::command]
+async fn media_audio_probe(
+    app: tauri::AppHandle,
+    url: String,
+) -> Result<Vec<media_audio::AudioTrack>, String> {
+    let resource_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
+    let tool = media_audio::executable(&resource_dir, "ffprobe")?;
+    tauri::async_runtime::spawn_blocking(move || media_audio::probe(&tool, &url))
+        .await
+        .map_err(|_| "Ошибка определения аудиодорожек".to_string())?
+}
+
+#[tauri::command]
+async fn media_audio_start(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    url: String,
+    stream: u32,
+    start: f64,
+    channels: usize,
+    rate: f64,
+) -> Result<u64, String> {
+    let resource_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
+    let tool = media_audio::executable(&resource_dir, "ffmpeg")?;
+    let decoder = state.media_audio.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        decoder.start(&tool, &url, stream, start, channels, rate)
+    })
+    .await
+    .map_err(|_| "Ошибка запуска аудио".to_string())?
+}
+
+#[tauri::command]
+async fn media_audio_read(
+    state: tauri::State<'_, AppState>,
+    id: u64,
+) -> Result<tauri::ipc::Response, String> {
+    let decoder = state.media_audio.clone();
+    let pcm = tauri::async_runtime::spawn_blocking(move || decoder.read(id))
+        .await
+        .map_err(|_| "Ошибка чтения аудио".to_string())??;
+    Ok(tauri::ipc::Response::new(pcm))
+}
+
+#[tauri::command]
+fn media_audio_stop(state: tauri::State<'_, AppState>, id: u64) {
+    state.media_audio.stop(Some(id));
 }
 
 #[tauri::command]
@@ -310,6 +360,7 @@ fn close_app(
     window: tauri::WebviewWindow,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
+    state.media_audio.stop(None);
     let _ = state.torrserver.stop(&app);
 
     {
@@ -1419,6 +1470,7 @@ pub fn run() {
             }
 
             app.manage(AppState {
+                media_audio: Arc::new(media_audio::AudioDecoder::default()),
                 store: Arc::new(Mutex::new(store)),
                 torrserver: Arc::new(torrserver::TorrServerManager::new()),
                 proxy: Arc::new(Mutex::new(proxy)),
@@ -1470,6 +1522,7 @@ pub fn run() {
         .on_page_load(|window, payload| {
             let _ = window.eval(BRIDGE_JS);
             let _ = window.eval(MIRROR_MODAL_JS);
+            let _ = window.eval(MEDIA_AUDIO_JS);
 
             // Локальный экран выбора зеркала не нуждается в инжекте клиента Prisma.
             if is_local_page(payload.url()) {
@@ -1528,6 +1581,10 @@ pub fn run() {
             inject_plugin(window);
         })
         .invoke_handler(tauri::generate_handler![
+            media_audio_probe,
+            media_audio_start,
+            media_audio_read,
+            media_audio_stop,
             get_app_version,
             app_installation_info,
             app_check_update,
@@ -1577,6 +1634,7 @@ pub fn run() {
             if let RunEvent::ExitRequested { .. } = event {
                 let state = app.state::<AppState>();
                 flush_window_state(&state);
+                state.media_audio.stop(None);
                 let _ = state.torrserver.stop(app);
                 state.proxy.lock().expect("proxy poisoned").stop();
             }

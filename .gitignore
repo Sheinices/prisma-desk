@@ -4,3 +4,6 @@
 .DS_Store
 .DS_Store
 scripts/make-windows-ico.py
+/src-tauri/resources/media-tools/*
+!/src-tauri/resources/media-tools/README.md
+/src-tauri/binaries/

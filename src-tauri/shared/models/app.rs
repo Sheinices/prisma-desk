@@ -8,13 +8,14 @@
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 
-use crate::services::{proxy, store, torrserver};
+use crate::services::{media_audio, proxy, store, torrserver};
 
 /// Положение окна: x, y, width, height в физических пикселях.
 pub type WindowRect = (i32, i32, u32, u32);
 
 #[derive(Clone)]
 pub struct AppState {
+    pub media_audio: Arc<media_audio::AudioDecoder>,
     pub store: Arc<Mutex<store::AppStore>>,
     /// Менеджер сам синхронизирует своё состояние, внешний мьютекс не нужен.
     pub torrserver: Arc<torrserver::TorrServerManager>,

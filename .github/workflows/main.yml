@@ -200,6 +200,9 @@ jobs:
           New-Item -ItemType Directory -Force -Path $portableDir | Out-Null
 
           Copy-Item "$releaseDir/Prisma.exe" "$portableDir/Prisma.exe" -Force
+          Copy-Item "$releaseDir/media-tools" "$portableDir/media-tools" -Recurse -Force
+          Copy-Item "$releaseDir/prisma-ffmpeg.exe" "$portableDir/prisma-ffmpeg.exe" -Force
+          Copy-Item "$releaseDir/prisma-ffprobe.exe" "$portableDir/prisma-ffprobe.exe" -Force
           if (Test-Path "$releaseDir/WebView2Loader.dll") {
             Copy-Item "$releaseDir/WebView2Loader.dll" "$portableDir/WebView2Loader.dll" -Force
           }

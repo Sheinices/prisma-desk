@@ -1,0 +1,102 @@
+{
+  "repository": "eugeneware/ffmpeg-static",
+  "tag": "b6.1.1",
+  "platforms": {
+    "aarch64-apple-darwin": [
+      {
+        "asset": "ffmpeg-darwin-arm64.gz",
+        "file": "ffmpeg",
+        "sha256": "8923876afa8db5585022d7860ec7e589af192f441c56793971276d450ed3bbfa",
+        "executableSha256": "a90e3db6a3fd35f6074b013f948b1aa45b31c6375489d39e572bea3f18336584"
+      },
+      {
+        "asset": "ffprobe-darwin-arm64.gz",
+        "file": "ffprobe",
+        "sha256": "d986a8ec7b030899fe66a8a288ed809a3543338705a3ce178cfb85869c5d80be",
+        "executableSha256": "bb2db6f5d8cef919da12fbf592119a987202a8c060a886f3cab091f9cab90b64"
+      },
+      {
+        "asset": "darwin-arm64.LICENSE",
+        "file": "FFmpeg-LICENSE.txt",
+        "sha256": "cb48bf09a11f5fb576cddb0431c8f5ed0a60157a9ec942adffc13907cbe083f2"
+      },
+      {
+        "asset": "darwin-arm64.README",
+        "file": "FFmpeg-README.txt",
+        "sha256": "05ba4b92c96605434b1aaae3eedf5a2c280c9607bf78ffca9a5b536d9af2dc6a"
+      }
+    ],
+    "x86_64-apple-darwin": [
+      {
+        "asset": "ffmpeg-darwin-x64.gz",
+        "file": "ffmpeg",
+        "sha256": "929b375c1182d956c51f7ac25e0b2b0411fb01f6f407aa15c9758efeb4242106",
+        "executableSha256": "ebdddc936f61e14049a2d4b549a412b8a40deeff6540e58a9f2a2da9e6b18894"
+      },
+      {
+        "asset": "ffprobe-darwin-x64.gz",
+        "file": "ffprobe",
+        "sha256": "d4da574d6e2e197bd259b47d69cf262df9e312af24ad960444f6d806d3d4c186",
+        "executableSha256": "fa3add0ce901f7241abe0dfc0155d958fc834aca3f8ce61f87cc712ae669c1e0"
+      },
+      {
+        "asset": "darwin-x64.LICENSE",
+        "file": "FFmpeg-LICENSE.txt",
+        "sha256": "2e1d16c72fd74e12063776371da757322f8b77589386532f4fd8634bde7de1af"
+      },
+      {
+        "asset": "darwin-x64.README",
+        "file": "FFmpeg-README.txt",
+        "sha256": "e88a0325f8e5b75210355e37341824f074d3cd82def2125be54c914b62848a36"
+      }
+    ],
+    "x86_64-unknown-linux-gnu": [
+      {
+        "asset": "ffmpeg-linux-x64.gz",
+        "file": "ffmpeg",
+        "sha256": "bfe8a8fc511530457b528c48d77b5737527b504a3797a9bc4866aeca69c2dffa",
+        "executableSha256": "e7e7fb30477f717e6f55f9180a70386c62677ef8a4d4d1a5d948f4098aa3eb99"
+      },
+      {
+        "asset": "ffprobe-linux-x64.gz",
+        "file": "ffprobe",
+        "sha256": "25d9b6ccb05e3d9de9e04e31e2506d8dd7f9f0418981965ac6df12e8d3afd067",
+        "executableSha256": "4f231a1960d83e403d08f7971e271707bec278a9ae18e21b8b5b03186668450d"
+      },
+      {
+        "asset": "linux-x64.LICENSE",
+        "file": "FFmpeg-LICENSE.txt",
+        "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+      },
+      {
+        "asset": "linux-x64.README",
+        "file": "FFmpeg-README.txt",
+        "sha256": "72f4b1b06d419d22ace6e7cc75f06826f90737345aa0b1736158929f4aacc537"
+      }
+    ],
+    "x86_64-pc-windows-msvc": [
+      {
+        "asset": "ffmpeg-win32-x64.gz",
+        "file": "ffmpeg.exe",
+        "sha256": "8883a3dffbd0a16cf4ef95206ea05283f78908dbfb118f73c83f4951dcc06d77",
+        "executableSha256": "04e1307997530f9cf2fe35cba2ca7e8875ca91da02f89d6c7243df819c94ad00"
+      },
+      {
+        "asset": "ffprobe-win32-x64.gz",
+        "file": "ffprobe.exe",
+        "sha256": "f309e6223ad89d2fe54bccd420a7709b66fd27540674e92309578ed491a43c8d",
+        "executableSha256": "3a7e2dc003dc2cd1472827e4c7c4f056ae1ae0ae7c5bbc580c99b49827351ba4"
+      },
+      {
+        "asset": "win32-x64.LICENSE",
+        "file": "FFmpeg-LICENSE.txt",
+        "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+      },
+      {
+        "asset": "win32-x64.README",
+        "file": "FFmpeg-README.txt",
+        "sha256": "a636a7183c58006351acbaf35303c0ed85c6e1320fd4e80de453ba6157de6311"
+      }
+    ]
+  }
+}

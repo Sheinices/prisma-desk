@@ -13,6 +13,10 @@ use tauri_build::{AppManifest, Attributes};
 /// разрешение `allow-<команда через дефис>` и выдаётся в
 /// capabilities/default.json. Список сверяет scripts/check-commands-acl.mjs.
 const APP_COMMANDS: &[&str] = &[
+    "media_audio_probe",
+    "media_audio_start",
+    "media_audio_read",
+    "media_audio_stop",
     "get_app_version",
     "app_installation_info",
     "app_check_update",

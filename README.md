@@ -179,6 +179,53 @@ AppImage не запустится — там нет `libwebkit2gtk-4.1`.
 
 ## Конфигурация
 
+### AC3/EAC3 во встроенном плеере
+
+Встроенный плеер поддерживает звук AC3 (Dolby Digital) и EAC3 (Dolby Digital
+Plus) через нативный FFmpeg, без Electron. Для прямого HTTP(S)-потока, в том
+числе MKV из TorrServer, FFprobe определяет аудиодорожки. Если в файле есть
+AC3/EAC3, звук выбранной дорожки декодируется в PCM 48 кГц и воспроизводится
+через Web Audio. Видео продолжает воспроизводить системный WebView.
+
+Работают штатное меню аудиодорожек, пауза, перемотка, громкость, отключение
+звука и изменение скорости с сохранением высоты звука. На паузе и при закрытии плеера FFmpeg останавливается;
+при перемотке декодирование начинается с новой позиции. Буферы ограничены,
+целиком загружать или преобразовывать фильм не нужно. FFmpeg получает аудио
+отдельным HTTP-запросом; для перемотки источник должен поддерживать Range.
+
+PCM сохраняет моно, стерео, 4, 5.1 и 7.1 канала; Web Audio выводит их в пределах
+возможностей устройства, автоматически сводя звук для стереовыхода. Это
+программное декодирование, без HDMI passthrough/Atmos. Поддержка
+видеокодека и контейнера по-прежнему зависит от системного WebView: например,
+этот аудиодекодер сам по себе не добавляет MKV или HEVC в WKWebView. HLS/DASH,
+DRM и IPTV в эту обработку не включаются и используют обычный механизм плеера.
+
+FFmpeg и FFprobe входят в установщики и Windows portable. Для сборки закреплены
+версия `b6.1.1` и SHA-256 в `build/media-tools.json`; инструменты автоматически
+подготавливаются перед `tauri build` для Windows x64, Linux x64, macOS x64/ARM64.
+Лицензии и сведения об исходниках поставляются в `media-tools`; исполняемые
+файлы упаковываются как sidecar (`prisma-ffmpeg`, `prisma-ffprobe`) и входят
+в подпись приложения macOS. `tauri dev` тоже подготавливает их автоматически.
+Перед прямым запуском `cargo check`/`cargo test` выполните `npm run prepare:media`.
+
+Проверки: `node scripts/verify-media-audio.js` и, после подготовки инструментов,
+`cargo test --manifest-path src-tauri/Cargo.toml decodes_ac3_eac3_over_http_and_seeks_without_aac -- --ignored`.
+Вторая проверка создаёт MKV с обеими дорожками, воспроизводит звук через HTTP
+и сравнивает PCM после перемотки с непрерывно декодированным звуком.
+
+На macOS можно проверить настоящий WKWebView и Web Audio синтетическим MP4
+с AC3/EAC3, без вывода звука на динамики:
+
+```sh
+cargo build --manifest-path src-tauri/Cargo.toml --example media_audio_webkit
+swift -module-cache-path /tmp/prisma-webkit-swift-cache scripts/verify-media-webkit.swift \
+  "$PWD/src-tauri/target/debug/examples/media_audio_webkit" \
+  "$PWD/src-tauri/target/debug/prisma-ffmpeg" \
+  "$PWD/src-tauri/target/debug/prisma-ffprobe"
+```
+
+Проверка требует доступа к оконному движку macOS и локальному HTTP-серверу.
+
 ### Prisma URL
 
 - Store key: `prismaUrl`

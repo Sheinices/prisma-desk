@@ -4,6 +4,8 @@
   "version": "../package.json",
   "identifier": "com.prisma.desktop",
   "build": {
+    "beforeDevCommand": "node scripts/prepare-media-tools.mjs",
+    "beforeBuildCommand": "node scripts/prepare-media-tools.mjs",
     "frontendDist": "../web"
   },
   "app": {
@@ -25,6 +27,10 @@
     }
   },
   "bundle": {
+    "externalBin": ["binaries/prisma-ffmpeg", "binaries/prisma-ffprobe"],
+    "resources": {
+      "resources/media-tools/": "media-tools/"
+    },
     "active": true,
     "targets": "all",
     "createUpdaterArtifacts": true,

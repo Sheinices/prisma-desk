@@ -6,6 +6,7 @@
 // Public License v3.0. See the LICENSE file in the project root for details.
 
 pub mod http;
+pub mod media_audio;
 pub mod player;
 pub mod proxy;
 pub mod store;
