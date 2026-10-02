@@ -825,11 +825,12 @@ mod tests {
         let offset = (position * SAMPLE_RATE as f64) as usize * 2 * 4;
         let reference = &reference[offset..offset + sought.len()];
         let mse: f64 = reference
-            .chunks_exact(4)
-            .zip(sought.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(sought.as_chunks::<4>().0.iter())
             .map(|(a, b)| {
-                let delta = f32::from_le_bytes(a.try_into().unwrap())
-                    - f32::from_le_bytes(b.try_into().unwrap());
+                let delta = f32::from_le_bytes(*a) - f32::from_le_bytes(*b);
                 (delta as f64).powi(2)
             })
             .sum::<f64>()

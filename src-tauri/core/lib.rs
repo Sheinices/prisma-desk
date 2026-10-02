@@ -299,10 +299,10 @@ fn app_installation_info() -> Value {
             });
         }
 
-        return json!({
+        json!({
             "portable": true,
             "path": null
-        });
+        })
     }
 
     #[cfg(not(target_os = "windows"))]
