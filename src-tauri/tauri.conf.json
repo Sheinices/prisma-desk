@@ -42,7 +42,8 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "infoPlist": "macos-info.plist"
+      "infoPlist": "macos-info.plist",
+      "signingIdentity": "-"
     },
     "linux": {
       "appimage": {

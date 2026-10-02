@@ -38,7 +38,7 @@ npm run dev
 Для сборки без приватного ключа апдейтера используйте разовое переопределение:
 
 ```sh
-npm run tauri -- build --no-sign --config '{"bundle":{"createUpdaterArtifacts":false}}'
+npm run tauri -- build --config '{"bundle":{"createUpdaterArtifacts":false}}'
 ```
 
 В PowerShell используйте правила экранирования своей оболочки.
@@ -48,9 +48,9 @@ npm run tauri -- build --no-sign --config '{"bundle":{"createUpdaterArtifacts":f
 {"bundle":{"createUpdaterArtifacts":false}}
 ```
 
-Флаг `--no-sign` отключает подпись для этой сборки. Такой вариант подходит
-для локальной проверки. Не переносите эти параметры в workflow выпуска релизов
-и не удаляйте публичный ключ апдейтера из конфигурации проекта.
+Это отключает только создание артефактов апдейтера. Подпись macOS сохраняется.
+Не используйте `--no-sign` для распространяемых macOS-сборок: он отключает
+подпись приложения и апдейтера. Не удаляйте публичный ключ из конфигурации.
 
 Для выбора платформы добавьте `--target`:
 
@@ -124,7 +124,27 @@ Linux собирается в Ubuntu 22.04 для совместимости с 
 `TAURI_SIGNING_PRIVATE_KEY` и `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
 Публичный ключ и адрес `latest.json` находятся в `src-tauri/tauri.conf.json`.
 Подпись апдейтера и подпись приложения Apple — отдельные механизмы;
-подпись и notarization macOS требуют собственной настройки.
+по умолчанию macOS-пакет получает ad-hoc подпись (`signingIdentity: "-"`),
+включая FFmpeg и FFprobe. Это проверка целостности, а не подтверждение Apple.
+Workflow проверяют подпись через `scripts/verify-macos-signature.sh`.
+В `main.yml` приложение архивируется через `ditto`, чтобы сохранить права запуска.
+
+Для распространения без ручного разрешения Gatekeeper нужны сертификат
+**Developer ID Application** и notarization. В GitHub Secrets добавьте:
+
+- `APPLE_CERTIFICATE`: экспортированный сертификат с приватным ключом `.p12`, в base64.
+- `APPLE_CERTIFICATE_PASSWORD`: пароль `.p12`.
+- `APPLE_SIGNING_IDENTITY`: имя сертификата Developer ID Application.
+- `APPLE_ID`: почта Apple Developer.
+- `APPLE_APP_SPECIFIC_PASSWORD`: пароль приложения для notarization.
+- `APPLE_TEAM_ID`: идентификатор команды Apple Developer.
+
+Оба workflow импортируют сертификат через `scripts/setup-macos-signing.sh`.
+Если сертификат отсутствует, используется ad-hoc подпись; если он задан,
+остальные секреты обязательны. Данные notarization передаются и повторной
+попытке сборки. Одного имени сертификата в GitHub Secrets недостаточно.
+Инструкция: [подпись macOS в Tauri](https://v2.tauri.app/distribute/sign/macos/).
+Секреты и сертификаты не добавляйте в репозиторий.
 
 FFmpeg и FFprobe упаковываются как sidecar-файлы `prisma-ffmpeg` и `prisma-ffprobe`.
 В Windows portable они должны входить в архив вместе с папкой `media-tools`.
