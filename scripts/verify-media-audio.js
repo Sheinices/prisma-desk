@@ -11,7 +11,7 @@ const script = fs.readFileSync(new URL("../src-tauri/module/media-audio.js", imp
 const turn = () => new Promise((resolve) => setImmediate(resolve));
 async function settle() { for (let i = 0; i < 8; i++) await turn(); }
 
-function harness({ codec = "eac3", probe, start, read } = {}) {
+function harness({ codec = "eac3", probe, start, read, subtitleTracks = [], subtitleRead } = {}) {
   const calls = [], timers = new Map(), contexts = [], messages = [];
   let sequence = 0, timerSequence = 0, video;
   class Media extends EventTarget {
@@ -24,6 +24,11 @@ function harness({ codec = "eac3", probe, start, read } = {}) {
       this.volume = 0.7;
       this.nativeMuted = false;
       this.seeking = false;
+    }
+    addTextTrack() {
+      const track = { cues: [], mode: "disabled", addCue(cue) { this.cues.push(cue); }, removeCue(cue) { this.cues.splice(this.cues.indexOf(cue), 1); } };
+      this.textTracks = [track];
+      return track;
     }
     get muted() { return this.nativeMuted; }
     set muted(value) { this.nativeMuted = value; }
@@ -70,6 +75,9 @@ function harness({ codec = "eac3", probe, start, read } = {}) {
   const sessions = new Map();
   window.__TAURI__ = { core: { async invoke(name, args) {
     calls.push({ name, ...args });
+    if (name === "media_subtitle_tracks") return subtitleTracks;
+    if (name === "media_subtitle_start") return ++sequence;
+    if (name === "media_subtitle_read") return subtitleRead(args);
     if (name === "media_audio_probe") return probe ? probe() : [
       { index: 2, codec, title: "Русский", language: "rus", channels: 6, default: true },
       { index: 5, codec: "ac3", title: "Original", language: "eng", channels: 2 },
@@ -89,7 +97,7 @@ function harness({ codec = "eac3", probe, start, read } = {}) {
   } } };
   vm.runInNewContext(script, {
     window, document: new EventTarget(), location: { href: "https://prisma.ws" },
-    HTMLMediaElement: Media, URL, ArrayBuffer, Uint8Array, DataView, Date,
+    HTMLMediaElement: Media, URL, ArrayBuffer, Uint8Array, DataView, Date, Event, TextDecoder, VTTCue: class { constructor(startTime, endTime, text) { Object.assign(this, { startTime, endTime, text }); } },
     setInterval(handler) { const id = ++timerSequence; timers.set(id, handler); return id; },
     clearInterval(id) { timers.delete(id); },
   });
@@ -104,6 +112,7 @@ function harness({ codec = "eac3", probe, start, read } = {}) {
   assert.equal(h.player.url("http://localhost:8090/stream?play&index=0"), "native result");
   await settle();
   const video = h.video(), context = h.contexts[0];
+  assert.equal(h.calls.filter((call) => call.name === "media_audio_read").length, 12, "PCM lookahead fills without waiting for timer ticks");
   assert.equal(video.nativeMuted, true);
   assert.equal(video.muted, false);
   assert.equal(video.audioTracks[0].enabled, true);
@@ -268,3 +277,35 @@ for (const options of [
   assert.equal(retired.paused, true, "closing the player must not restart a retired video");
 }
 console.log("FFmpeg audio: PCM/multichannel, pause/resume, seek, tracks, speed, mute, bounded buffers, failures/EOF, teardown and stale requests passed");
+
+{
+  const data = new TextEncoder().encode("WEBVTT\n\n00:00.100 --> 00:03.000\nПривет\n\n");
+  let part = 0;
+  const h = harness({ subtitleTracks: [{ index: 9, codec: "subrip", language: "rus", title: "Русские" }],
+    subtitleRead: () => [data.slice(0, 48).buffer, data.slice(48).buffer, new ArrayBuffer(0)][part++] || new ArrayBuffer(0) });
+  h.player.url("https://example.com/movie.mkv");
+  await settle();
+  const video = h.video(), rendered = [];
+  video.addEventListener("subtitle", (event) => rendered.push(event.text));
+  assert.equal(video.customSubs.length, 1);
+  assert.ok(h.messages.some((message) => message.type === "subs"));
+  video.customSubs[0].mode = "showing";
+  await settle();
+  video.currentTime = 1;
+  video.dispatchEvent(new Event("timeupdate"));
+  assert.equal(rendered.at(-1), "Привет");
+  assert.equal(video.textTracks[0].cues.length, 1);
+  assert.equal(video.textTracks[0].cues[0].startTime, 0.1);
+  video.currentTime = 4;
+  video.dispatchEvent(new Event("timeupdate"));
+  assert.equal(rendered.at(-1), "");
+  video.currentTime = 200;
+  video.dispatchEvent(new Event("seeking"));
+  await settle();
+  assert.ok(h.calls.some((call) => call.name === "media_subtitle_start" && call.stream === 9 && call.start === 185));
+  video.customSubs[0].mode = "disabled";
+  assert.equal(video.textTracks[0].cues.length, 0);
+  h.player.destroy();
+  assert.equal(video.customSubs, undefined);
+}
+console.log("Embedded subtitles: UTF-8 chunks, menu, timeline, seek, off and teardown passed");

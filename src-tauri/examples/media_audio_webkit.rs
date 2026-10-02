@@ -24,7 +24,14 @@ fn main() {
     let args: Vec<_> = std::env::args().collect();
     let ffmpeg = PathBuf::from(&args[1]);
     let ffprobe = PathBuf::from(&args[2]);
-    let fixture = std::env::temp_dir().join(format!("prisma-webkit-{}.mp4", std::process::id()));
+    let mkv = std::env::var("PRISMA_TEST_MKV").is_ok();
+    let fixture = std::env::temp_dir().join(format!(
+        "prisma-webkit-{}.{}",
+        std::process::id(),
+        if mkv { "mkv" } else { "mp4" }
+    ));
+    let subtitles = std::env::temp_dir().join(format!("prisma-webkit-{}.srt", std::process::id()));
+    std::fs::write(&subtitles, "1\n00:00:00,100 --> 00:00:12,000\nТестовые субтитры\n\n2\n00:00:14,000 --> 00:00:40,000\nПосле перемотки\n").unwrap();
     assert!(Command::new(&ffmpeg)
         .args([
             "-y",
@@ -34,21 +41,27 @@ fn main() {
             "-f",
             "lavfi",
             "-i",
-            "color=c=black:s=128x128:r=25:d=20",
+            "color=c=black:s=128x128:r=25:d=45",
             "-f",
             "lavfi",
             "-i",
-            "sine=frequency=440:sample_rate=48000:duration=20",
+            "sine=frequency=440:sample_rate=48000:duration=45",
             "-f",
             "lavfi",
             "-i",
-            "sine=frequency=880:sample_rate=48000:duration=20",
+            "sine=frequency=880:sample_rate=48000:duration=45",
+            "-i",
+            subtitles.to_str().unwrap(),
             "-map",
             "0:v",
             "-map",
             "1:a",
             "-map",
             "2:a",
+            "-map",
+            "3:s",
+            "-c:s",
+            if mkv { "srt" } else { "mov_text" },
             "-c:v",
             "libx264",
             "-profile:v",
@@ -76,9 +89,13 @@ fn main() {
         .success());
     let media = Arc::new(std::fs::read(&fixture).unwrap());
     std::fs::remove_file(&fixture).unwrap();
+    std::fs::remove_file(&subtitles).unwrap();
     let server = Server::http(("127.0.0.1", 0)).unwrap();
     let origin = format!("http://{}", server.server_addr());
-    let url = format!("{origin}/media.mp4");
+    let url = std::env::var("PRISMA_TEST_URL")
+        .unwrap_or_else(|_| format!("{origin}/media.{}", if mkv { "mkv" } else { "mp4" }));
+    let subtitles = Arc::new(media_audio::AudioDecoder::default());
+    let remuxer = Arc::new(media_audio::AudioDecoder::default());
     let decoder = Arc::new(media_audio::AudioDecoder::default());
     let shutdown = Arc::new(AtomicBool::new(false));
     println!("{origin}");
@@ -87,23 +104,28 @@ fn main() {
         let Some(request) = server.recv_timeout(Duration::from_millis(100)).unwrap() else {
             continue;
         };
-        let (ffmpeg, ffprobe, url, media, decoder, shutdown) = (
+        let (ffmpeg, ffprobe, url, media, decoder, shutdown, remuxer, subtitles) = (
             ffmpeg.clone(),
             ffprobe.clone(),
             url.clone(),
             media.clone(),
             decoder.clone(),
             shutdown.clone(),
+            remuxer.clone(),
+            subtitles.clone(),
         );
         std::thread::spawn(move || {
             serve(
-                request, &ffmpeg, &ffprobe, &url, &media, &decoder, &shutdown,
+                request, &ffmpeg, &ffprobe, &url, &media, &decoder, &shutdown, &remuxer, &subtitles,
             )
         });
     }
     decoder.stop(None);
+    remuxer.stop(None);
+    subtitles.stop(None);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn serve(
     mut request: Request,
     ffmpeg: &std::path::Path,
@@ -112,12 +134,25 @@ fn serve(
     media: &[u8],
     decoder: &media_audio::AudioDecoder,
     shutdown: &AtomicBool,
+    remuxer: &media_audio::AudioDecoder,
+    subtitles: &media_audio::AudioDecoder,
 ) {
     match request.url() {
         "/" => {
             let _ = request.respond(
-                Response::from_string(include_str!("../../scripts/media-webkit-test.html"))
-                    .with_header(header("Content-Type", "text/html")),
+                Response::from_string(
+                    include_str!("../../scripts/media-webkit-test.html")
+                        .replace("__MEDIA_URL_JSON__", &serde_json::to_string(url).unwrap())
+                        .replace(
+                            "/media.mp4",
+                            if url.ends_with(".mkv") {
+                                "/media.mkv"
+                            } else {
+                                "/media.mp4"
+                            },
+                        ),
+                )
+                .with_header(header("Content-Type", "text/html")),
             );
         }
         "/media-audio.js" => {
@@ -126,7 +161,7 @@ fn serve(
                     .with_header(header("Content-Type", "application/javascript")),
             );
         }
-        "/media.mp4" => {
+        "/media.mp4" | "/media.mkv" => {
             let range = request
                 .headers()
                 .iter()
@@ -160,6 +195,8 @@ fn serve(
         }
         "/shutdown" => {
             decoder.stop(None);
+            remuxer.stop(None);
+            subtitles.stop(None);
             shutdown.store(true, Ordering::Relaxed);
             let _ = request.respond(Response::empty(200));
         }
@@ -172,12 +209,55 @@ fn serve(
             let result: Result<Vec<u8>, String> = (|| {
                 if matches!(
                     route.as_str(),
-                    "/api/media_audio_probe" | "/api/media_audio_start"
+                    "/api/media_audio_probe"
+                        | "/api/media_audio_start"
+                        | "/api/media_video_info"
+                        | "/api/media_video_start"
+                        | "/api/media_subtitle_tracks"
+                        | "/api/media_subtitle_start"
                 ) && input["url"] != url
                 {
                     return Err("fixture URL required".into());
                 }
                 match route.as_str() {
+                    "/api/media_subtitle_tracks" => Ok(serde_json::to_vec(
+                        &media_audio::subtitle_tracks(ffprobe, url)?,
+                    )
+                    .unwrap()),
+                    "/api/media_subtitle_start" => {
+                        Ok(serde_json::to_vec(&subtitles.start_subtitles(
+                            ffmpeg,
+                            url,
+                            input["stream"].as_u64().unwrap_or(0) as u32,
+                            input["start"].as_f64().unwrap_or(0.0),
+                        )?)
+                        .unwrap())
+                    }
+                    "/api/media_subtitle_read" => subtitles.read(input["id"].as_u64().unwrap_or(0)),
+                    "/api/media_subtitle_stop" => {
+                        subtitles.stop(input["id"].as_u64());
+                        Ok(b"null".to_vec())
+                    }
+
+                    "/api/media_video_info" => {
+                        Ok(serde_json::to_vec(&media_audio::video_info(ffprobe, url)?).unwrap())
+                    }
+                    "/api/media_video_start" => {
+                        let start = input["start"].as_f64().unwrap_or(0.0);
+                        let offset = media_audio::video_offset(ffprobe, url, start)?;
+                        let id = remuxer.start_video(ffmpeg, url, start)?;
+                        Ok(serde_json::to_vec(&media_audio::VideoSession { id, offset }).unwrap())
+                    }
+                    "/api/media_video_keep_alive" => {
+                        remuxer.keep_alive(input["id"].as_u64().unwrap_or(0))?;
+                        Ok(b"null".to_vec())
+                    }
+                    "/api/media_video_read" => remuxer.read(input["id"].as_u64().unwrap_or(0)),
+                    "/api/media_video_stop" => {
+                        remuxer.stop(input["id"].as_u64());
+                        Ok(b"null".to_vec())
+                    }
+
                     "/api/media_audio_probe" => {
                         Ok(serde_json::to_vec(&media_audio::probe(ffprobe, url)?).unwrap())
                     }

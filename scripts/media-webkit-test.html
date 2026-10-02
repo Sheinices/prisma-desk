@@ -25,12 +25,13 @@
     calls.push({ name, ...args });
     const response = await fetch(`/api/${name}`, { method: "POST", body: JSON.stringify(args) });
     if (!response.ok) throw (await response.json()).message;
-    return name === "media_audio_read" ? response.arrayBuffer() : response.json();
+    return (name === "media_audio_read" || name === "media_video_read" || name === "media_subtitle_read") ? response.arrayBuffer() : response.json();
   } } };
-  let video, tracks;
+  let video, tracks, subtitleText = "";
   const player = {
     url(url) {
       video = document.createElement("video"); video.muted = true;
+      video.addEventListener("subtitle", (event) => { subtitleText = event.text; });
       video.src = url; video.playsInline = true; video.volume = 1;
       document.querySelector("#player").append(video);
       video.play().catch(() => {});
@@ -46,7 +47,7 @@
   async function waitFor(condition, message, timeout = 10000) {
     const end = Date.now() + timeout;
     while (Date.now() < end) { if (condition()) return; await sleep(50); }
-    throw new Error(`${message}: ${JSON.stringify({ time: video?.currentTime, paused: video?.paused, ready: video?.readyState, error: video?.error?.code, bridge: window.__prismaMediaAudio.status(), notifications, calls: calls.slice(-8) })}`);
+    throw new Error(`${message}: ${JSON.stringify({ time: video?.currentTime, paused: video?.paused, ready: video?.readyState, error: video?.error?.code, bridge: window.__prismaMediaAudio.status(), notifications, subtitleText, results, cues: Array.from(video?.textTracks?.[0]?.cues || []).map((cue) => [cue.startTime, cue.endTime, cue.text]), starts: calls.filter((call) => call.name.endsWith("_start")), calls: calls.slice(-8) })}`);
   }
   function energy() {
     const analyser = contexts[0]?.analyser; if (!analyser) return 0;
@@ -60,20 +61,52 @@
     return maximum * actual.sampleRate / analyser.fftSize;
   }
   async function run() {
-    player.url(`${location.origin}/media.mp4`);
-    await waitFor(() => window.__prismaMediaAudio.status().active && tracks?.length === 2, "bridge/track discovery");
+    const testUrl = __MEDIA_URL_JSON__;
+    player.url(testUrl);
+    await waitFor(() => window.__prismaMediaAudio.status().active && tracks?.length === 2, "bridge/track discovery", 25000);
     video.muted = false;
     await waitFor(() => !video.paused && video.currentTime > 0.3 && energy() > 0.01, "audible PCM graph");
+    if (new URL(testUrl).origin !== location.origin) {
+      check(video.videoWidth > 0 && video.videoHeight > 0, "TorrServer MKV video decoded");
+      check(calls.some((call) => call.name === "media_video_start"), "MKV remux path used");
+      check(energy() > 0.01, "TorrServer audio decoded");
+      video.currentTime = 60;
+      video.play().catch(() => {});
+      await waitFor(() => video.currentTime > 60.2 && energy() > 0.001, "TorrServer seek/resume", 20000);
+      check(calls.some((call) => call.name === "media_video_start" && call.start > 59), "seek restarts video at requested timeline");
+      await waitFor(() => video.customSubs?.length > 0, "TorrServer subtitle tracks");
+      video.customSubs[0].mode = "showing";
+      await waitFor(() => video.textTracks[0]?.cues?.length > 0, "TorrServer subtitle extraction", 20000);
+      check(video.textTracks[0].cues[0].startTime >= 40, "embedded subtitles retain the requested timeline");
+      player.destroy(); await sleep(200);
+      check(contexts[0].actual.state === "closed" && notifications.length === 0, "TorrServer teardown/no errors");
+      return { ok: true, results };
+    }
+    if (testUrl.endsWith(".mkv")) {
+      await waitFor(() => video.customSubs?.length === 1, "embedded subtitle discovery");
+      video.pause(); video.currentTime = 1;
+      video.customSubs[0].mode = "showing";
+      await waitFor(() => subtitleText.includes("Тестовые субтитры"), "embedded subtitle rendering");
+      check(subtitleText.includes("Тестовые субтитры"), "embedded UTF-8 subtitles rendered");
+      video.play().catch(() => {});
+      await waitFor(() => !video.paused && energy() > 0.01, "resume after subtitle check");
+    }
     check(video.videoWidth === 128, "real video decoded");
     check(Math.abs(frequency() - 440) < 50, "AC3 decoded to the Web Audio graph");
     check(Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, "muted").get.call(video), "native audio remains silenced");
     video.pause(); const position = video.currentTime;
     await sleep(250);
     check(Math.abs(video.currentTime - position) < 0.05 && energy() < 0.001, "pause stops both clocks/output");
-    video.currentTime = 4.375;
-    await video.play();
-    await waitFor(() => video.currentTime > 4.5 && energy() > 0.01, "seek/resume audio");
-    check(calls.some((c) => c.name === "media_audio_start" && Math.abs(c.start - 4.375) < 0.15), "seek uses the video timeline");
+    video.currentTime = location.pathname && calls.some((c) => c.name === "media_video_start") ? 14.375 : 4.375;
+    video.play().catch(() => {});
+    await waitFor(() => video.currentTime > (calls.some((c) => c.name === "media_video_start") ? 14.5 : 4.5) && energy() > 0.01, "seek/resume audio");
+    check(calls.some((c) => c.name === "media_audio_start" && Math.abs(c.start - (calls.some((call) => call.name === "media_video_start") ? 14.375 : 4.375)) < 0.15), "seek uses the video timeline");
+    if (testUrl.endsWith(".mkv")) {
+      await waitFor(() => subtitleText.includes("После перемотки"), "subtitles after seek");
+      check(subtitleText.includes("После перемотки"), "subtitle timeline preserved after seek");
+      video.customSubs[0].mode = "disabled";
+      check(subtitleText === "", "subtitle off clears text");
+    }
     tracks.forEach((track) => { track.enabled = false; track.selected = false; });
     tracks[1].enabled = true; tracks[1].selected = true;
     await waitFor(() => window.__prismaMediaAudio.status().codec === "eac3" && channels.includes(6) && Math.abs(frequency() - 880) < 50 && energy() > 0.005, "EAC3 track/5.1 output");
@@ -95,5 +128,5 @@
 <script src="/media-audio.js"></script>
 <script>
   run().then((result) => window.webkit.messageHandlers.testResult.postMessage(result))
-    .catch((error) => window.webkit.messageHandlers.testResult.postMessage({ ok: false, error: error.message, results }));
+    .catch((error) => { player.destroy(); window.webkit.messageHandlers.testResult.postMessage({ ok: false, error: error.message, results }); });
 </script>

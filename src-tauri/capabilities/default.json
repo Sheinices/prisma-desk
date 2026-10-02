@@ -13,6 +13,15 @@
     ]
   },
   "permissions": [
+    "allow-media-subtitle-tracks",
+    "allow-media-subtitle-start",
+    "allow-media-subtitle-read",
+    "allow-media-subtitle-stop",
+    "allow-media-video-info",
+    "allow-media-video-start",
+    "allow-media-video-read",
+    "allow-media-video-stop",
+    "allow-media-video-keep-alive",
     "allow-media-audio-probe",
     "allow-media-audio-start",
     "allow-media-audio-read",

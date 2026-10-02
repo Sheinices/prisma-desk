@@ -165,6 +165,107 @@ fn media_audio_stop(state: tauri::State<'_, AppState>, id: u64) {
 }
 
 #[tauri::command]
+async fn media_video_info(
+    app: tauri::AppHandle,
+    url: String,
+) -> Result<media_audio::VideoInfo, String> {
+    let resource_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
+    let tool = media_audio::executable(&resource_dir, "ffprobe")?;
+    tauri::async_runtime::spawn_blocking(move || media_audio::video_info(&tool, &url))
+        .await
+        .map_err(|_| "Ошибка метаданных видео".to_string())?
+}
+
+#[tauri::command]
+async fn media_video_start(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    url: String,
+    start: f64,
+) -> Result<media_audio::VideoSession, String> {
+    let resource_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
+    let tool = media_audio::executable(&resource_dir, "ffmpeg")?;
+    let probe = media_audio::executable(&resource_dir, "ffprobe")?;
+    let decoder = state.media_video.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let offset = media_audio::video_offset(&probe, &url, start)?;
+        let id = decoder.start_video(&tool, &url, start)?;
+        Ok(media_audio::VideoSession { id, offset })
+    })
+    .await
+    .map_err(|_| "Ошибка запуска видео".to_string())?
+}
+
+#[tauri::command]
+async fn media_video_read(
+    state: tauri::State<'_, AppState>,
+    id: u64,
+) -> Result<tauri::ipc::Response, String> {
+    let decoder = state.media_video.clone();
+    let data = tauri::async_runtime::spawn_blocking(move || decoder.read(id))
+        .await
+        .map_err(|_| "Ошибка чтения видео".to_string())??;
+    Ok(tauri::ipc::Response::new(data))
+}
+
+#[tauri::command]
+fn media_video_keep_alive(state: tauri::State<'_, AppState>, id: u64) -> Result<(), String> {
+    state.media_video.keep_alive(id)
+}
+
+#[tauri::command]
+fn media_video_stop(state: tauri::State<'_, AppState>, id: u64) {
+    state.media_video.stop(Some(id));
+}
+
+#[tauri::command]
+async fn media_subtitle_tracks(
+    app: tauri::AppHandle,
+    url: String,
+) -> Result<Vec<media_audio::AudioTrack>, String> {
+    let resource_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
+    let tool = media_audio::executable(&resource_dir, "ffprobe")?;
+    tauri::async_runtime::spawn_blocking(move || media_audio::subtitle_tracks(&tool, &url))
+        .await
+        .map_err(|_| "Ошибка метаданных субтитров".to_string())?
+}
+
+#[tauri::command]
+async fn media_subtitle_start(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    url: String,
+    stream: u32,
+    start: f64,
+) -> Result<u64, String> {
+    let resource_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
+    let tool = media_audio::executable(&resource_dir, "ffmpeg")?;
+    let decoder = state.media_subtitles.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        decoder.start_subtitles(&tool, &url, stream, start)
+    })
+    .await
+    .map_err(|_| "Ошибка запуска субтитров".to_string())?
+}
+
+#[tauri::command]
+async fn media_subtitle_read(
+    state: tauri::State<'_, AppState>,
+    id: u64,
+) -> Result<tauri::ipc::Response, String> {
+    let decoder = state.media_subtitles.clone();
+    let data = tauri::async_runtime::spawn_blocking(move || decoder.read(id))
+        .await
+        .map_err(|_| "Ошибка чтения субтитров".to_string())??;
+    Ok(tauri::ipc::Response::new(data))
+}
+
+#[tauri::command]
+fn media_subtitle_stop(state: tauri::State<'_, AppState>, id: u64) {
+    state.media_subtitles.stop(Some(id));
+}
+
+#[tauri::command]
 fn app_installation_info() -> Value {
     #[cfg(target_os = "windows")]
     {
@@ -361,6 +462,8 @@ fn close_app(
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     state.media_audio.stop(None);
+    state.media_video.stop(None);
+    state.media_subtitles.stop(None);
     let _ = state.torrserver.stop(&app);
 
     {
@@ -1471,6 +1574,8 @@ pub fn run() {
 
             app.manage(AppState {
                 media_audio: Arc::new(media_audio::AudioDecoder::default()),
+                media_video: Arc::new(media_audio::AudioDecoder::default()),
+                media_subtitles: Arc::new(media_audio::AudioDecoder::default()),
                 store: Arc::new(Mutex::new(store)),
                 torrserver: Arc::new(torrserver::TorrServerManager::new()),
                 proxy: Arc::new(Mutex::new(proxy)),
@@ -1581,6 +1686,15 @@ pub fn run() {
             inject_plugin(window);
         })
         .invoke_handler(tauri::generate_handler![
+            media_subtitle_tracks,
+            media_subtitle_start,
+            media_subtitle_read,
+            media_subtitle_stop,
+            media_video_info,
+            media_video_start,
+            media_video_read,
+            media_video_stop,
+            media_video_keep_alive,
             media_audio_probe,
             media_audio_start,
             media_audio_read,
@@ -1635,6 +1749,8 @@ pub fn run() {
                 let state = app.state::<AppState>();
                 flush_window_state(&state);
                 state.media_audio.stop(None);
+                state.media_video.stop(None);
+                state.media_subtitles.stop(None);
                 let _ = state.torrserver.stop(app);
                 state.proxy.lock().expect("proxy poisoned").stop();
             }

@@ -2,14 +2,13 @@
 // Copyright (C) 2026 Sheinices
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Native FFmpeg audio decoding for the HTML video player. PCM goes over binary
-//! IPC; video is never decoded, encoded or stored by this service.
+//! Native FFmpeg PCM decoding and video stream copying over bounded binary IPC.
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -34,9 +33,9 @@ pub struct AudioTrack {
 
 pub fn validate_url(url: &str) -> Result<(), String> {
     if url.len() > 8192 || url.chars().any(|c| c.is_control()) {
-        return Err("Некорректный адрес аудиопотока".into());
+        return Err("Некорректный адрес медиапотока".into());
     }
-    let parsed = tauri::Url::parse(url).map_err(|_| "Некорректный адрес аудиопотока")?;
+    let parsed = tauri::Url::parse(url).map_err(|_| "Некорректный адрес медиапотока")?;
     if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
         return Err("FFmpeg поддерживает только HTTP(S)-потоки".into());
     }
@@ -111,6 +110,10 @@ fn input_args(command: &mut Command, url: &str) {
 }
 
 pub fn parse_tracks(bytes: &[u8]) -> Result<Vec<AudioTrack>, String> {
+    parse_media_tracks(bytes, "audio")
+}
+
+fn parse_media_tracks(bytes: &[u8], kind: &str) -> Result<Vec<AudioTrack>, String> {
     let json: Value =
         serde_json::from_slice(bytes).map_err(|_| "Не удалось прочитать аудиодорожки")?;
     Ok(json["streams"]
@@ -118,7 +121,7 @@ pub fn parse_tracks(bytes: &[u8]) -> Result<Vec<AudioTrack>, String> {
         .into_iter()
         .flatten()
         .filter_map(|stream| {
-            if stream["codec_type"] != "audio" {
+            if stream["codec_type"] != kind {
                 return None;
             }
             Some(AudioTrack {
@@ -137,16 +140,117 @@ pub fn parse_tracks(bytes: &[u8]) -> Result<Vec<AudioTrack>, String> {
         .collect())
 }
 
-pub fn probe(executable: &Path, url: &str) -> Result<Vec<AudioTrack>, String> {
+type MetadataCache = Option<(String, Instant, Vec<u8>)>;
+
+fn metadata(executable: &Path, url: &str) -> Result<Vec<u8>, String> {
     validate_url(url)?;
+    // Audio, video and subtitle discovery share one network probe. TorrServer
+    // should not have to service three concurrent metadata scans of the file.
+    static CACHE: OnceLock<Mutex<MetadataCache>> = OnceLock::new();
+    let mut cache = CACHE.get_or_init(|| Mutex::new(None)).lock().unwrap();
+    if let Some((cached_url, created, bytes)) = cache.as_ref() {
+        if cached_url == url && created.elapsed() < TIMEOUT {
+            return Ok(bytes.clone());
+        }
+    }
+    let mut cmd = command(executable);
+    cmd.args(["-v", "error"]);
+    input_args(&mut cmd, url);
+    cmd.args(["-show_entries",
+        "stream=index,codec_type,codec_name,channels:stream_tags=language,title:stream_disposition=default:format=duration",
+        "-of", "json"]);
+    let bytes = probe_output(cmd)?;
+    *cache = Some((url.to_string(), Instant::now(), bytes.clone()));
+    Ok(bytes)
+}
+
+pub fn probe(executable: &Path, url: &str) -> Result<Vec<AudioTrack>, String> {
+    parse_tracks(&metadata(executable, url)?)
+}
+
+#[derive(Serialize)]
+pub struct VideoInfo {
+    pub duration: f64,
+    pub mime: String,
+}
+
+pub fn video_info(executable: &Path, url: &str) -> Result<VideoInfo, String> {
+    let data: Value = serde_json::from_slice(&metadata(executable, url)?)
+        .map_err(|_| "Ошибка метаданных видео")?;
+    let video = data["streams"]
+        .as_array()
+        .and_then(|streams| {
+            streams
+                .iter()
+                .find(|stream| stream["codec_type"] == "video")
+        })
+        .ok_or("Видеодорожка не найдена")?;
+    if video["codec_name"] != "h264" {
+        return Err("Перепаковка MKV пока поддерживает видео H.264".into());
+    }
+    let duration = data["format"]["duration"]
+        .as_str()
+        .and_then(|s| s.parse::<f64>().ok())
+        .filter(|d| d.is_finite() && *d > 0.0 && *d <= 604800.0)
+        .ok_or("Не удалось определить длительность видео")?;
+    Ok(VideoInfo {
+        duration,
+        mime: r#"video/mp4; codecs="avc1.640028""#.into(),
+    })
+}
+
+#[derive(Serialize)]
+pub struct VideoSession {
+    pub id: u64,
+    pub offset: f64,
+}
+
+pub fn video_offset(executable: &Path, url: &str, start: f64) -> Result<f64, String> {
+    validate_url(url)?;
+    if !start.is_finite() || !(0.0..=604800.0).contains(&start) {
+        return Err("Некорректная позиция видео".into());
+    }
     let mut cmd = command(executable);
     cmd.args(["-v", "error"]);
     input_args(&mut cmd, url);
     cmd.args([
-        "-select_streams", "a", "-show_entries",
-        "stream=index,codec_type,codec_name,channels:stream_tags=language,title:stream_disposition=default",
-        "-of", "json",
+        "-select_streams",
+        "v:0",
+        "-read_intervals",
+        &if start > 0.0 {
+            format!("{start}%+#32")
+        } else {
+            "%+#32".into()
+        },
+        "-show_packets",
+        "-show_entries",
+        "packet=dts_time,pts_time",
+        "-of",
+        "json",
     ]);
+    let data: Value =
+        serde_json::from_slice(&probe_output(cmd)?).map_err(|_| "Ошибка позиции видео")?;
+    let packet = &data["packets"][0];
+    packet["dts_time"]
+        .as_str()
+        .or_else(|| packet["pts_time"].as_str())
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|value| value.is_finite())
+        .ok_or("Не удалось определить ключевой кадр видео".into())
+}
+
+pub fn subtitle_tracks(executable: &Path, url: &str) -> Result<Vec<AudioTrack>, String> {
+    let mut tracks = parse_media_tracks(&metadata(executable, url)?, "subtitle")?;
+    tracks.retain(|track| {
+        matches!(
+            track.codec.as_str(),
+            "subrip" | "ass" | "ssa" | "webvtt" | "mov_text" | "text"
+        )
+    });
+    Ok(tracks)
+}
+
+fn probe_output(mut cmd: Command) -> Result<Vec<u8>, String> {
     let mut child = cmd.spawn().map_err(|_| "Не удалось запустить ffprobe")?;
     let stdout = child.stdout.take().ok_or("Нет вывода ffprobe")?;
     let child = Arc::new(Mutex::new(child));
@@ -175,7 +279,7 @@ pub fn probe(executable: &Path, url: &str) -> Result<Vec<AudioTrack>, String> {
     if !child.wait().map_err(|_| "Ошибка ffprobe")?.success() {
         return Err("Не удалось определить аудиодорожки потока".into());
     }
-    parse_tracks(&bytes)
+    Ok(bytes)
 }
 
 struct DecodeJob {
@@ -242,14 +346,10 @@ impl AudioDecoder {
             previous.stop();
         }
         let mut cmd = command(executable);
-        cmd.args([
-            "-nostdin",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-ss",
-            &start.to_string(),
-        ]);
+        cmd.args(["-nostdin", "-hide_banner", "-loglevel", "error"]);
+        if start > 0.0 {
+            cmd.args(["-ss", &start.to_string()]);
+        }
         input_args(&mut cmd, url);
         // Preserve pitch when the video changes speed. Web Audio playbackRate
         // alone would change the pitch of voices as well as their tempo.
@@ -292,6 +392,101 @@ impl AudioDecoder {
             "f32le",
             "pipe:1",
         ]);
+        self.launch(
+            cmd,
+            &mut active,
+            SAMPLE_RATE * channels * 4 / 2,
+            channels * 4,
+            true,
+        )
+    }
+
+    pub fn start_video(&self, executable: &Path, url: &str, start: f64) -> Result<u64, String> {
+        validate_url(url)?;
+        if !start.is_finite() || !(0.0..=604800.0).contains(&start) {
+            return Err("Некорректная позиция видео".into());
+        }
+        let mut active = self.active.lock().unwrap();
+        if let Some(previous) = active.take() {
+            previous.stop();
+        }
+        let mut cmd = command(executable);
+        cmd.args(["-nostdin", "-hide_banner", "-loglevel", "error", "-copyts"]);
+        if start > 0.0 {
+            cmd.args(["-ss", &start.to_string()]);
+        }
+        input_args(&mut cmd, url);
+        cmd.args([
+            "-map",
+            "0:v:0",
+            "-an",
+            "-sn",
+            "-dn",
+            "-c:v",
+            "copy",
+            "-movflags",
+            "frag_keyframe+empty_moov+default_base_moof",
+            "-frag_duration",
+            "1000000",
+            "-avoid_negative_ts",
+            "disabled",
+            "-f",
+            "mp4",
+            "pipe:1",
+        ]);
+        self.launch(cmd, &mut active, 256 * 1024, 1, false)
+    }
+
+    pub fn start_subtitles(
+        &self,
+        executable: &Path,
+        url: &str,
+        stream: u32,
+        start: f64,
+    ) -> Result<u64, String> {
+        validate_url(url)?;
+        if stream > 255 || !start.is_finite() || !(0.0..=604800.0).contains(&start) {
+            return Err("Некорректная дорожка или позиция субтитров".into());
+        }
+        let mut active = self.active.lock().unwrap();
+        if let Some(previous) = active.take() {
+            previous.stop();
+        }
+        let mut cmd = command(executable);
+        cmd.args(["-nostdin", "-hide_banner", "-loglevel", "error"]);
+        // Matroska's explicit seek to zero can skip the first subtitle packet.
+        // Reading from the beginning avoids losing the opening cue.
+        if start > 0.0 {
+            cmd.args(["-ss", &start.to_string()]);
+        }
+        input_args(&mut cmd, url);
+        cmd.args([
+            "-map",
+            &format!("0:{stream}"),
+            "-vn",
+            "-an",
+            "-dn",
+            "-t",
+            "120",
+            "-c:s",
+            "webvtt",
+            "-f",
+            "webvtt",
+            "-flush_packets",
+            "1",
+            "pipe:1",
+        ]);
+        self.launch(cmd, &mut active, 64 * 1024, 1, false)
+    }
+
+    fn launch(
+        &self,
+        mut cmd: Command,
+        active: &mut Option<Arc<DecodeJob>>,
+        packet_bytes: usize,
+        alignment: usize,
+        full_packets: bool,
+    ) -> Result<u64, String> {
         let mut child = cmd.spawn().map_err(|_| "Не удалось запустить FFmpeg")?;
         let mut stdout = child.stdout.take().ok_or("Нет вывода FFmpeg")?;
         // Eight seconds of decoded audio, irrespective of movie length.
@@ -305,28 +500,32 @@ impl AudioDecoder {
             last_read: Mutex::new(Instant::now()),
         });
         let reader_job = job.clone();
-        let packet_bytes = SAMPLE_RATE * channels * 4 / 2;
         thread::spawn(move || loop {
             let mut bytes = vec![0; packet_bytes];
             let mut count = 0;
             while count < bytes.len() {
                 match stdout.read(&mut bytes[count..]) {
                     Ok(0) => break,
-                    Ok(n) => count += n,
+                    Ok(n) => {
+                        count += n;
+                        if !full_packets {
+                            break;
+                        }
+                    }
                     Err(_) => {
-                        send_packet(&tx, &reader_job, Err("Ошибка чтения аудио FFmpeg".into()));
+                        send_packet(&tx, &reader_job, Err("Ошибка чтения FFmpeg".into()));
                         reader_job.stop();
                         return;
                     }
                 }
             }
             if count > 0 {
-                bytes.truncate(count - count % (channels * 4));
+                bytes.truncate(count - count % alignment);
                 if !send_packet(&tx, &reader_job, Ok(bytes)) {
                     break;
                 }
             }
-            if count < packet_bytes {
+            if count == 0 || full_packets && count < packet_bytes {
                 let success = reader_job
                     .child
                     .lock()
@@ -337,7 +536,7 @@ impl AudioDecoder {
                     send_packet(
                         &tx,
                         &reader_job,
-                        Err("FFmpeg не смог декодировать аудиодорожку".into()),
+                        Err("FFmpeg не смог обработать дорожку".into()),
                     );
                 }
                 break;
@@ -357,6 +556,16 @@ impl AudioDecoder {
         Ok(id)
     }
 
+    pub fn keep_alive(&self, id: u64) -> Result<(), String> {
+        let active = self.active.lock().unwrap();
+        let job = active
+            .as_ref()
+            .filter(|j| j.id == id && !j.cancelled.load(Ordering::Relaxed))
+            .ok_or("Медиасессия завершена")?;
+        *job.last_read.lock().unwrap() = Instant::now();
+        Ok(())
+    }
+
     pub fn read(&self, id: u64) -> Result<Vec<u8>, String> {
         let job = self
             .active
@@ -365,18 +574,18 @@ impl AudioDecoder {
             .as_ref()
             .filter(|j| j.id == id)
             .cloned()
-            .ok_or("Аудиосессия завершена")?;
+            .ok_or("Медиасессия завершена")?;
         *job.last_read.lock().unwrap() = Instant::now();
         let received = job.receiver.lock().unwrap().recv_timeout(TIMEOUT);
         if job.cancelled.load(Ordering::Relaxed) {
-            return Err("Аудиосессия завершена".into());
+            return Err("Медиасессия завершена".into());
         }
         match received {
             Ok(packet) => packet,
             Err(mpsc::RecvTimeoutError::Disconnected) => Ok(Vec::new()),
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 job.stop();
-                Err("Истекло время ожидания аудио".into())
+                Err("Истекло время ожидания FFmpeg".into())
             }
         }
     }
@@ -439,6 +648,9 @@ mod tests {
         let ffmpeg = executable(&resources, "ffmpeg").unwrap();
         let ffprobe = executable(&resources, "ffprobe").unwrap();
         let fixture = std::env::temp_dir().join(format!("prisma-audio-{}.mkv", std::process::id()));
+        let subtitles =
+            std::env::temp_dir().join(format!("prisma-audio-{}.srt", std::process::id()));
+        std::fs::write(&subtitles, "1\n00:00:00,500 --> 00:00:02,000\nПривет\n\n2\n00:00:03,000 --> 00:00:05,000\nПосле перемотки\n").unwrap();
         let status = command(&ffmpeg)
             .args([
                 "-y",
@@ -457,14 +669,22 @@ mod tests {
                 "lavfi",
                 "-i",
                 "sine=frequency=880:sample_rate=48000:duration=6",
+                "-i",
+                subtitles.to_str().unwrap(),
                 "-map",
                 "0:v",
                 "-map",
                 "1:a",
                 "-map",
                 "2:a",
+                "-map",
+                "3:s",
+                "-c:s",
+                "srt",
                 "-c:v",
-                "mpeg4",
+                "libx264",
+                "-g",
+                "10",
                 "-c:a:0",
                 "ac3",
                 "-c:a:1",
@@ -486,6 +706,7 @@ mod tests {
         assert!(status.success());
         let bytes = std::fs::read(&fixture).unwrap();
         std::fs::remove_file(&fixture).unwrap();
+        std::fs::remove_file(&subtitles).unwrap();
         let server = Server::http(("127.0.0.1", 0)).unwrap();
         let url = format!("http://{}/movie.mkv", server.server_addr());
         let shutdown = Arc::new(AtomicBool::new(false));
@@ -520,6 +741,60 @@ mod tests {
                 let _ = request.respond(response);
             }
         });
+
+        let video = video_info(&ffprobe, &url).unwrap();
+        assert!((video.duration - 6.0).abs() < 0.1);
+        let opening_dts = video_offset(&ffprobe, &url, 0.0).unwrap();
+        assert!(
+            (-0.3..0.05).contains(&opening_dts),
+            "opening DTS: {opening_dts}"
+        );
+        let keyframe = video_offset(&ffprobe, &url, 2.375).unwrap();
+        assert!(
+            (1.7..=2.375).contains(&keyframe),
+            "keyframe DTS: {keyframe}"
+        );
+        let subtitle_tracks = subtitle_tracks(&ffprobe, &url).unwrap();
+        assert_eq!(subtitle_tracks.len(), 1);
+        assert_eq!(subtitle_tracks[0].index, 3);
+        let subtitles = AudioDecoder::default();
+        let initial = subtitles.start_subtitles(&ffmpeg, &url, 3, 0.0).unwrap();
+        let mut opening = Vec::new();
+        loop {
+            let chunk = subtitles.read(initial).unwrap();
+            if chunk.is_empty() {
+                break;
+            }
+            opening.extend(chunk);
+        }
+        assert!(String::from_utf8(opening).unwrap().contains("Привет"));
+        let id = subtitles.start_subtitles(&ffmpeg, &url, 3, 2.5).unwrap();
+        let mut vtt = Vec::new();
+        loop {
+            let chunk = subtitles.read(id).unwrap();
+            if chunk.is_empty() {
+                break;
+            }
+            vtt.extend(chunk);
+        }
+        let text = String::from_utf8(vtt).unwrap();
+        assert!(text.starts_with("WEBVTT"));
+        assert!(text.contains("После перемотки"));
+        let timing = text.lines().find(|line| line.contains(" --> ")).unwrap();
+        let begin: f64 = timing
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .rsplit(':')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(
+            (begin - 0.5).abs() < 0.02,
+            "relative cue timestamps: {text}"
+        );
+        subtitles.stop(None);
 
         let tracks = probe(&ffprobe, &url).unwrap();
         assert_eq!(tracks.len(), 2);

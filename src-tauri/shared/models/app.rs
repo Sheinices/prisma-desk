@@ -15,6 +15,8 @@ pub type WindowRect = (i32, i32, u32, u32);
 
 #[derive(Clone)]
 pub struct AppState {
+    pub media_subtitles: Arc<media_audio::AudioDecoder>,
+    pub media_video: Arc<media_audio::AudioDecoder>,
     pub media_audio: Arc<media_audio::AudioDecoder>,
     pub store: Arc<Mutex<store::AppStore>>,
     /// Менеджер сам синхронизирует своё состояние, внешний мьютекс не нужен.
