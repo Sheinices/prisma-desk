@@ -47,7 +47,7 @@ Prisma, смотрите видео во встроенном или внешн�
 | Система | Архитектура | Формат |
 | --- | --- | --- |
 | Windows | x64 | Установщик `.exe` / `.msi` или portable-архив `.zip` |
-| macOS с Apple Silicon | ARM64 / aarch64 | `.dmg` или архив приложения `.app` |
+| macOS с Apple Silicon (M1, M2, M3, M4 и новее) | ARM64 / aarch64 | `.dmg` или архив приложения `.app` |
 | macOS с Intel | x64 / x86_64 | `.dmg` или архив приложения `.app` |
 | Linux | x64 / x86_64 | `.AppImage`, `.deb` или `.rpm` |
 

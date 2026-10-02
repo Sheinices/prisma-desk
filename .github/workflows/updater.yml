@@ -103,7 +103,22 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: Prisma Desktop ${{ github.ref_name }}
-          releaseBody: Automated release build for Prisma Desktop.
+          releaseBody: |
+            ## Какую сборку скачать
+
+            | Система | Для какого компьютера | Файл для установки |
+            | --- | --- | --- |
+            | macOS — Apple Silicon | Mac с чипом Apple M-серии (M1, M2, M3, M4 и новее), ARM64 | `Prisma_*_aarch64.dmg` |
+            | macOS — Intel | Mac с процессором Intel, x64 | `Prisma_*_x64.dmg` |
+            | Windows | ПК с процессором Intel или AMD, x64 | `Prisma_*_x64-setup.exe` или `Prisma_*_x64_en-US.msi` |
+            | Windows — без установки | ПК с процессором Intel или AMD, x64 | `Prisma-portable-x64.zip` |
+            | Linux | ПК с процессором Intel или AMD, x64 | `*_amd64.deb` или `*.x86_64.rpm` |
+
+            На Mac тип процессора можно посмотреть в меню Apple → «Об этом Mac».
+            `aarch64` означает ARM64 — это сборка для Apple Silicon.
+
+            Файлы `.sig`, `latest.json` и `.app.tar.gz` предназначены для автообновления.
+            Для обычной установки на Mac скачайте `.dmg`.
           releaseDraft: false
           prerelease: false
           # Без --no-sign: вопреки описанию в справке CLI, этот флаг отключает
@@ -121,7 +136,22 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: Prisma Desktop ${{ github.ref_name }}
-          releaseBody: Automated release build for Prisma Desktop.
+          releaseBody: |
+            ## Какую сборку скачать
+
+            | Система | Для какого компьютера | Файл для установки |
+            | --- | --- | --- |
+            | macOS — Apple Silicon | Mac с чипом Apple M-серии (M1, M2, M3, M4 и новее), ARM64 | `Prisma_*_aarch64.dmg` |
+            | macOS — Intel | Mac с процессором Intel, x64 | `Prisma_*_x64.dmg` |
+            | Windows | ПК с процессором Intel или AMD, x64 | `Prisma_*_x64-setup.exe` или `Prisma_*_x64_en-US.msi` |
+            | Windows — без установки | ПК с процессором Intel или AMD, x64 | `Prisma-portable-x64.zip` |
+            | Linux | ПК с процессором Intel или AMD, x64 | `*_amd64.deb` или `*.x86_64.rpm` |
+
+            На Mac тип процессора можно посмотреть в меню Apple → «Об этом Mac».
+            `aarch64` означает ARM64 — это сборка для Apple Silicon.
+
+            Файлы `.sig`, `latest.json` и `.app.tar.gz` предназначены для автообновления.
+            Для обычной установки на Mac скачайте `.dmg`.
           releaseDraft: false
           prerelease: false
           args: --target ${{ matrix.target }}
