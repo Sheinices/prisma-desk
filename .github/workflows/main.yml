@@ -72,7 +72,7 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent "$app" "src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Prisma-arm64.zip"
 
       - name: Upload macOS ARM64 artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: prisma-macos-arm64
           path: |
@@ -123,7 +123,7 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent "$app" "src-tauri/target/x86_64-apple-darwin/release/bundle/macos/Prisma-x64.zip"
 
       - name: Upload macOS x64 artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: prisma-macos-x64
           path: |
@@ -181,7 +181,7 @@ jobs:
         run: npm run tauri -- build --target x86_64-unknown-linux-gnu --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
       - name: Upload Linux artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: prisma-linux-x64
           path: |
@@ -235,7 +235,7 @@ jobs:
           Compress-Archive -Path "$portableDir/*" -DestinationPath "$releaseDir/bundle/nsis/Prisma-portable-x64.zip" -Force
 
       - name: Upload Windows artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: prisma-windows-x64
           path: |
